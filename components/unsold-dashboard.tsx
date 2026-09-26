@@ -106,30 +106,36 @@ export function UnsoldDashboard({ lots }: { lots: Lot[] }) {
       {loadError && <p role="alert" style={{ fontSize: 13 }}>Saved demo listings could not load. <button style={{ textDecoration: "underline" }} onClick={() => { setLoading(true); setRevision((value) => value + 1); }}>Retry</button></p>}
       {unsold.map((lot) => (
         <article key={lot.id} style={{ border: "1px solid var(--line)", borderRadius: 22, padding: 16, marginBottom: 12, background: "#fff" }}>
-          <div style={{ display: "flex", gap: 14, alignItems: "center", marginBottom: 6 }}>
+          <div style={{ display: "flex", gap: 14, alignItems: "center" }}>
             {lot.image_url && <img src={lot.image_url} alt={lot.name} style={{ width: 72, height: 80, objectFit: "contain", flexShrink: 0 }} />}
             <div style={{ minWidth: 0 }}><span style={{ fontFamily: "var(--mono)", fontSize: 10, color: "var(--ink-3)", letterSpacing: ".04em" }}>{lot.status === "unsold" ? "UNSOLD AT AUCTION" : "NOT AUCTIONED"}</span><h3 style={{ margin: "2px 0 0", fontSize: 17, fontWeight: 600, overflowWrap: "anywhere" }}>{lot.name}</h3><p className="sub" style={{ margin: "5px 0 0", fontSize: 13 }}>{Number(lot.reserve) || Number(lot.low) ? `${gbp(askingPrice(lot))} asking price` : "Pricing… lists at £5 until then"}</p></div>
+          </div>
+          <div style={{ display: "flex", gap: 12, borderTop: "1px solid var(--line)", paddingTop: 14, marginTop: 10 }}>
+            {platforms.map((platform) => {
+              const key = keyFor(lot.id, platform);
+              const listing = listings[key];
+              const job = jobs[key];
+              const busy = !!pending[key];
+              const caption = busy ? (job?.steps.length ? `Listing… ${Math.min(job.step + 1, job.steps.length)}/${job.steps.length}` : "Listing…") : listing ? "View listing ↗" : errors[key] ? "Retry" : "List item";
+              const tile = <><span style={{ display: "grid", placeItems: "center", width: 64, height: 48, border: "1px solid var(--line)", borderRadius: 15, background: "#fff" }}><MarketplaceLogo platform={platform} /></span><span style={{ fontSize: 11, color: "var(--ink-2)", marginTop: 6 }}>{caption}</span></>;
+              const style = { display: "flex", flexDirection: "column" as const, alignItems: "center", textDecoration: "none", color: "var(--ink)", background: "transparent", padding: "0 4px", minWidth: 76, opacity: loading || busy ? .55 : 1 };
+              return listing ? <Link key={platform} href={listing.mockUrl} aria-label={`View demo ${label(platform)} listing for ${lot.name}`} style={style}>{tile}</Link> : <button key={platform} disabled={loading || busy} onClick={() => submit(lot.id, platform)} aria-label={`${errors[key] ? "Retry listing" : "List"} ${lot.name} on demo ${label(platform)}`} style={style}>{tile}</button>;
+            })}
           </div>
           {platforms.map((platform) => {
             const key = keyFor(lot.id, platform);
             const listing = listings[key];
             const job = jobs[key];
             const running = !!job && !job.done;
-            return <div key={platform} style={{ paddingTop: 12, marginTop: 12, borderTop: "1px solid var(--line)" }}>
-              {running ? <AgentRunning job={job} platform={platform} />
-                : listing ? <div style={{ display: "flex", gap: 8 }}>
-                  <Link href={listing.mockUrl} style={pill(true)}>View {label(platform)} listing <span aria-hidden="true">↗</span></Link>
-                  {listing.jobId && <Link href={agentUrl(platform, listing.jobId)} style={pill(false)}>Watch agent replay</Link>}
-                </div>
-                : <button disabled={loading || !!pending[key]} onClick={() => submit(lot.id, platform)} style={{ ...pill(true), width: "100%", opacity: loading || pending[key] ? .5 : 1 }}>
-                  {pending[key] ? `Starting the ${label(platform)} agent…` : `${errors[key] ? "Retry" : "List on"} demo ${label(platform)}`}
-                </button>}
-              {job?.error && !running && <Link href={agentUrl(platform, job.id)} style={{ display: "inline-block", fontSize: 12, color: "var(--ink)", textDecoration: "underline", padding: "10px 0 0" }}>See where the agent stopped</Link>}
+            const replay = listing?.jobId ?? (job?.done ? job.id : null);
+            return <div key={platform}>
+              {running && <AgentRunning job={job} platform={platform} />}
+              {!running && replay && <Link href={agentUrl(platform, replay)} style={{ display: "inline-block", fontSize: 12, color: "var(--ink-2)", textDecoration: "underline", padding: "10px 0 0" }}>{job?.error ? `See where the ${label(platform)} agent stopped` : `Watch the ${label(platform)} agent replay`}</Link>}
               {notes[key] && <p style={{ fontSize: 12, color: "var(--ink-2)", margin: "8px 0 0" }}>{notes[key]}</p>}
               {errors[key] && <p role="alert" style={{ fontSize: 12, color: "#a32727", margin: "8px 0 0" }}>{errors[key]}</p>}
-              <Similar platform={platform} items={listing?.similar?.length ? listing.similar : similarFor(lot, platform)} />
             </div>;
           })}
+          <Similar lot={lot} listings={listings} />
         </article>
       ))}
     </section>
@@ -137,25 +143,33 @@ export function UnsoldDashboard({ lots }: { lots: Lot[] }) {
 }
 
 function AgentRunning({ job, platform }: { job: BrowserJob; platform: Platform }) {
-  return <div style={{ display: "flex", gap: 12, alignItems: "center" }}>
-    <div style={{ width: 64, aspectRatio: "420 / 600", flexShrink: 0, borderRadius: 10, overflow: "hidden", border: "1px solid var(--line)", background: "var(--paper)" }}>
+  return <div style={{ display: "flex", gap: 12, alignItems: "center", marginTop: 12 }}>
+    <div style={{ width: 44, aspectRatio: "420 / 600", flexShrink: 0, borderRadius: 10, overflow: "hidden", border: "1px solid var(--line)", background: "var(--paper)" }}>
       {job.screenshot && <img src={job.screenshot} alt="" style={{ width: "100%", height: "100%", objectFit: "cover", objectPosition: "top" }} />}
     </div>
     <div style={{ flex: 1, minWidth: 0 }}>
       <p role="status" style={{ margin: 0, fontSize: 13, fontWeight: 600 }}>Agent is listing on demo {label(platform)}</p>
-      <p className="sub" style={{ margin: "3px 0 8px", fontSize: 12, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{job.steps.length ? `${Math.min(job.step + 1, job.steps.length)}/${job.steps.length} · ${job.steps[job.step] ?? "Finishing"}` : "Launching Chromium…"}</p>
-      <Link href={agentUrl(platform, job.id)} style={{ ...pill(false), flex: "none", display: "inline-flex" }}>Watch agent <span aria-hidden="true">→</span></Link>
+      <p className="sub" style={{ margin: "2px 0 0", fontSize: 12, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{job.steps.length ? `${Math.min(job.step + 1, job.steps.length)}/${job.steps.length} · ${job.steps[job.step] ?? "Finishing"}` : "Launching Chromium…"}</p>
     </div>
+    <Link href={agentUrl(platform, job.id)} style={{ ...pill(false), flex: "none" }}>Watch <span aria-hidden="true">→</span></Link>
   </div>;
 }
 
-function Similar({ platform, items }: { platform: Platform; items: SimilarItem[] }) {
-  return <div style={{ marginTop: 10 }}>
-    <p style={{ fontFamily: "var(--mono)", fontSize: 10, color: "var(--ink-3)", letterSpacing: ".04em", margin: "0 0 2px" }}>{platform === "ebay" ? "SIMILAR ITEMS ON EBAY" : "SIMILAR ON MARKETPLACE"}</p>
-    {items.slice(-3).map((item) => <a key={item.url} href={item.url} target="_blank" rel="noopener noreferrer" style={{ display: "flex", alignItems: "center", gap: 8, minHeight: 44, fontSize: 13, color: "var(--ink)", textDecoration: "none" }}>
-      <span style={{ flex: 1, minWidth: 0, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", color: item.search ? "var(--ink-2)" : undefined }}>{item.title}</span>
-      {item.price ? <span style={{ fontWeight: 600 }}>{gbp(item.price)}</span> : null}
-      <span aria-hidden="true">↗</span>
-    </a>)}
-  </div>;
+/** One quiet line of real items: the closest listing each marketplace has, or a real search. */
+function Similar({ lot, listings }: { lot: Lot; listings: Record<string, Listing> }) {
+  const picks = platforms.map((platform) => {
+    const saved = listings[keyFor(lot.id, platform)]?.similar;
+    const items: SimilarItem[] = saved?.length ? saved : similarFor(lot, platform);
+    return { platform, item: items.find((i) => !i.search) ?? items[items.length - 1] };
+  }).filter((p) => p.item);
+  if (!picks.length) return null;
+  return <p style={{ margin: "12px 0 0", fontSize: 12, color: "var(--ink-2)", display: "flex", flexWrap: "wrap", gap: "0 6px" }}>
+    <span>Similar:</span>
+    {picks.map(({ platform, item }, i) => <span key={platform}>{i ? "· " : ""}<a href={item!.url} target="_blank" rel="noopener noreferrer" style={{ color: "var(--ink)" }}>{label(platform)}{item!.price ? ` ${gbp(item!.price)}` : ""} ↗</a></span>)}
+  </p>;
+}
+
+function MarketplaceLogo({ platform }: { platform: Platform }) {
+  if (platform === "ebay") return <span aria-hidden="true" style={{ fontFamily: "Arial, sans-serif", fontWeight: 500, fontSize: 27, letterSpacing: "-2px", lineHeight: 1, paddingRight: 2 }}><span style={{ color: "#e53238" }}>e</span><span style={{ color: "#0064d2" }}>b</span><span style={{ color: "#f5af02" }}>a</span><span style={{ color: "#86b817" }}>y</span></span>;
+  return <svg aria-hidden="true" width="29" height="29" viewBox="0 0 32 32" fill="none"><path d="M6 6h20l3 8H3l3-8Z" fill="#1877f2"/><path d="M4 14v3a3 3 0 0 0 6 0 3 3 0 0 0 6 0 3 3 0 0 0 6 0 3 3 0 0 0 6 0v-3" fill="#1877f2"/><path d="M6 21v7h20v-7M12 28v-7h8v7" stroke="#1877f2" strokeWidth="2.5" strokeLinejoin="round"/><path d="M11 7 9 14m7-7v7m5-7 2 7" stroke="white" strokeWidth="1.5"/></svg>;
 }
