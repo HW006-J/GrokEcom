@@ -91,8 +91,8 @@ export async function createDraftOrderInvoice(input: {
     }`,
     {
       input: {
-        note: `ClosetLive auction win: ${input.itemTitle} by ${input.buyerName}`,
-        tags: ['closetlive', 'auction'],
+        note: `The Sellout — ${input.itemTitle} won by ${input.buyerName}`,
+        tags: ['sellout', 'auction'],
         lineItems: [
           {
             variantId: `gid://shopify/ProductVariant/${input.variantId}`,
@@ -106,4 +106,37 @@ export async function createDraftOrderInvoice(input: {
   const d = data.draftOrderCreate;
   if (!d.draftOrder) throw new Error(`draftOrderCreate: ${d.userErrors.map((e) => e.message).join('; ')}`);
   return d.draftOrder.invoiceUrl;
+}
+
+/**
+ * A winning bid needs something to pay for. Lots are not products until they sell,
+ * so create the product and the draft order together and hand back the invoice URL.
+ * Returns null when Shopify is not configured or anything goes wrong.
+ */
+export async function createCheckoutForLot(input: {
+  name: string;
+  blurb: string | null;
+  imageUrl: string | null;
+  amount: number;
+  buyerName: string;
+}): Promise<string | null> {
+  if (!shopifyConfigured()) return null;
+  try {
+    const { variantId } = await createProduct({
+      title: input.name,
+      descriptionHtml: input.blurb ?? '',
+      vendor: 'The Sellout',
+      price: input.amount,
+      imageUrl: input.imageUrl ?? undefined,
+    });
+    return await createDraftOrderInvoice({
+      variantId,
+      amount: input.amount,
+      buyerName: input.buyerName,
+      itemTitle: input.name,
+    });
+  } catch (e) {
+    console.warn('Shopify checkout for lot failed:', e);
+    return null;
+  }
 }
