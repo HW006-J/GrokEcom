@@ -23,6 +23,7 @@
 * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
 
 html, body { height: 100%; }
+html { -webkit-text-size-adjust: 100%; }
 
 body {
   margin: 0;
@@ -62,11 +63,11 @@ button { font: inherit; color: inherit; border: 0; background: none; cursor: poi
 .safe-b { padding-bottom: max(18px, env(safe-area-inset-bottom)); }
 
 /* ── Type ─────────────────────────────────────────────────── */
-.display { font-size: 34px; line-height: 1.05; font-weight: 600; letter-spacing: -1.2px; margin: 0; }
-.title   { font-size: 22px; font-weight: 600; letter-spacing: -.5px; margin: 0; }
+.display { font-size: clamp(26px, 8.2vw, 36px); line-height: 1.05; font-weight: 600; letter-spacing: -1.2px; margin: 0; }
+.title   { font-size: clamp(18px, 5.2vw, 23px); font-weight: 600; letter-spacing: -.5px; margin: 0; }
 .meta    { font-family: var(--mono); font-size: 11px; letter-spacing: .06em; color: var(--ink-3); text-transform: uppercase; }
 .sub     { font-size: 14px; color: var(--ink-2); margin: 0; }
-.numeral { font-size: 40px; font-weight: 600; letter-spacing: -1.6px; font-variant-numeric: tabular-nums; }
+.numeral { font-size: clamp(32px, 10vw, 44px); font-weight: 600; letter-spacing: -1.6px; font-variant-numeric: tabular-nums; }
 
 /* ── Controls ─────────────────────────────────────────────── */
 .pill {
@@ -176,4 +177,51 @@ button { font: inherit; color: inherit; border: 0; background: none; cursor: poi
 
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: .001ms !important; transition-duration: .001ms !important; }
+}
+
+
+/* ── Responsive behaviour ─────────────────────────────────── */
+
+/* Nothing may push the layout sideways on a narrow phone. */
+.shell { overflow-x: hidden; }
+img, svg, video { max-width: 100%; }
+
+/* Small phones: buy back vertical space without changing the design. */
+@media (max-height: 740px) {
+  .pad { padding-inline: 18px; }
+  .pill { min-height: 48px; padding-inline: 20px; }
+  .cloud { min-height: 200px; }
+  .auctioneer, .cam-bar { --tight: 1; }
+}
+
+@media (max-height: 670px) {
+  .safe-t { padding-top: max(10px, env(safe-area-inset-top)); }
+  .safe-b { padding-bottom: max(10px, env(safe-area-inset-bottom)); }
+  .pill { min-height: 44px; }
+  .shutter { width: 62px; height: 62px; min-height: 62px; }
+  .cam-bar { padding: 10px 14px; }
+}
+
+/* Very narrow phones, 320px class. */
+@media (max-width: 360px) {
+  .pad { padding-inline: 16px; }
+  .pill { padding-inline: 16px; font-size: 14px; }
+  .chip { padding: 8px 11px; font-size: 12px; gap: 6px; }
+  .dock { padding: 5px; }
+}
+
+/* Landscape on a phone: the fixed-height shell would crush everything, so let it scroll. */
+@media (max-height: 560px) and (orientation: landscape) {
+  .shell { height: auto; min-height: 100svh; overflow-y: auto; }
+  .cloud { min-height: 320px; }
+}
+
+/* Tablets and desktop keep the phone frame but centre it comfortably. */
+@media (min-width: 900px) {
+  .shell { max-width: 480px; }
+}
+
+/* Installed as a PWA there is no browser chrome, so the safe areas do the work. */
+@media (display-mode: standalone) {
+  body { overscroll-behavior: none; }
 }
