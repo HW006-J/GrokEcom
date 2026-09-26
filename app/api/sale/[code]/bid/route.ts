@@ -1,6 +1,6 @@
 import { ok, fail } from '@/lib/api';
 import { db } from '@/lib/db';
-import { findSale } from '@/lib/sale';
+import { findSale, openingBid } from '@/lib/sale';
 import type { BidResponse } from '@/lib/types';
 
 type Body = { bidder?: string; amount?: number };
@@ -29,7 +29,15 @@ export async function POST(request: Request, { params }: { params: Promise<{ cod
   }
 
   const current = sale.high_bid === null || sale.high_bid === undefined ? null : Number(sale.high_bid);
-  if (amount <= (current ?? 0)) return fail(`bid must beat £${current ?? 0}`, 409);
+
+  if (current === null) {
+    // First bid on this lot: it has to meet the opening the auctioneer announced.
+    const lot = await store.getLot(sale.current_lot_id);
+    const opening = openingBid(lot);
+    if (amount < opening) return fail(`bidding opens at £${opening}`, 409);
+  } else if (amount <= current) {
+    return fail(`bid must beat £${current}`, 409);
+  }
 
   // Compare-and-set: only win if the high bid is still what we read, so two
   // people tapping at the same instant cannot both become the leader.

@@ -32,11 +32,21 @@ function shortName(name: string): string {
 
 // ── Settling a lot ──────────────────────────────────────────
 
-export async function closeLot(code: string): Promise<CloseLotResponse> {
+/**
+ * Settle the lot on the block. Callers must already hold the sale lock:
+ * `closeLot` takes it for outside callers, and `runTick` already holds it.
+ */
+async function settleLot(code: string): Promise<CloseLotResponse> {
   const store = db();
   const sale = await findSale(code);
   if (!sale) throw new Error('sale not found');
   if (!sale.current_lot_id) return { winner: null, amount: null, checkoutUrl: null };
+
+  // A lot that has not been offered yet cannot fall. Closing during the
+  // introduction used to mark it unsold without anyone getting to bid.
+  if (sale.phase !== 'bidding' && sale.phase !== 'sold') {
+    return { winner: null, amount: null, checkoutUrl: null };
+  }
 
   const lot = await store.getLot(sale.current_lot_id);
   if (!lot) throw new Error('lot not found');
@@ -246,7 +256,7 @@ async function runTick(code: string): Promise<TickResponse> {
     }
     case 'bidding': {
       if (sale.lot_ends_at && new Date(sale.lot_ends_at).getTime() <= now) {
-        const result = await closeLot(code);
+        const result = await settleLot(code);
         sale = { ...sale, phase: 'sold', lot_ends_at: null };
         action = 'close_lot';
         event = result.winner
@@ -317,16 +327,53 @@ async function runTick(code: string): Promise<TickResponse> {
   return { say, action, answeredMessageIds };
 }
 
+// ── One thing at a time, per sale ───────────────────────────
+//
 // Two ticks landing together used to double-advance the phase and speak two
-// lines over each other, which is what made the auctioneer sound garbled.
-// One tick per sale at a time; a tick that arrives mid-flight is dropped
-// with an empty line so the caller stays quiet rather than talking twice.
-const inflight = new Map<string, Promise<TickResponse>>();
+// lines over each other. Closing went around that lock entirely, so a tick and
+// a hammer could run at once and the auctioneer would invite bids on a lot that
+// had just sold. Both paths now queue on the same chain.
+
+const queue = new Map<string, Promise<unknown>>();
+/** Incremented synchronously on entry, so a racing caller sees it immediately. */
+const waiting = new Map<string, number>();
+
+function withSaleLock<T>(key: string, fn: () => Promise<T>): Promise<T> {
+  waiting.set(key, (waiting.get(key) ?? 0) + 1);
+  const prev = queue.get(key) ?? Promise.resolve();
+  const release = () => {
+    const n = (waiting.get(key) ?? 1) - 1;
+    if (n <= 0) waiting.delete(key);
+    else waiting.set(key, n);
+  };
+  const run = prev.then(fn, fn).finally(release);
+  // Keep the chain alive even if this link rejects.
+  queue.set(key, run.then(NOOP, NOOP));
+  return run;
+}
+
+const NOOP = () => {};
+
+const SILENT: TickResponse = { say: '', action: 'none', answeredMessageIds: [] };
 
 export async function tick(code: string): Promise<TickResponse> {
   const key = code.toUpperCase();
-  if (inflight.has(key)) return { say: '', action: 'none', answeredMessageIds: [] };
-  const run = runTick(key).finally(() => inflight.delete(key));
-  inflight.set(key, run);
-  return run;
+  // Something is already working on this sale, very possibly the hammer.
+  // Stay quiet rather than queue up and then speak a line about a lot that
+  // has since sold.
+  if (waiting.get(key)) return SILENT;
+
+  return withSaleLock(key, async () => {
+    const out = await runTick(key);
+    // While we were composing that line, something else joined the queue —
+    // almost always the hammer. Whatever we just wrote is about to be
+    // contradicted, so keep the phase change and drop the words.
+    if ((waiting.get(key) ?? 0) > 1) return { ...out, say: '' };
+    return out;
+  });
+}
+
+/** The hammer. Waits its turn rather than dropping: settlement is authoritative. */
+export async function closeLot(code: string): Promise<CloseLotResponse> {
+  return withSaleLock(code.toUpperCase(), () => settleLot(code));
 }

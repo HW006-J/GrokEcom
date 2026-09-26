@@ -6,7 +6,6 @@ import { gbp, type ScannedObject } from "@/lib/mock";
 import { loadObjects, saveObjects } from "@/lib/store";
 import { Grid, List, Chevron, Check, Scan } from "@/components/icons";
 
-type Body = { x: number; y: number; r: number };
 
 export default function ObjectsScreen() {
   const router = useRouter();
@@ -120,32 +119,7 @@ export default function ObjectsScreen() {
 
 /* ── Floating cloud ─────────────────────────────────────────── */
 
-/** Push overlapping objects apart until everything has room, then keep it in frame. */
-function relax(bodies: Body[], w: number, h: number, gap: number, margin: number) {
-  for (let pass = 0; pass < 220; pass++) {
-    for (let i = 0; i < bodies.length; i++) {
-      for (let j = i + 1; j < bodies.length; j++) {
-        const a = bodies[i];
-        const b = bodies[j];
-        const dx = b.x - a.x;
-        const dy = b.y - a.y;
-        const d = Math.hypot(dx, dy) || 0.001;
-        const min = a.r + b.r + gap;
-        if (d < min) {
-          const push = (min - d) / 2;
-          const ux = dx / d;
-          const uy = dy / d;
-          a.x -= ux * push; a.y -= uy * push;
-          b.x += ux * push; b.y += uy * push;
-        }
-      }
-    }
-    for (const b of bodies) {
-      b.x = Math.max(b.r + margin, Math.min(w - b.r - margin, b.x));
-      b.y = Math.max(b.r + margin, Math.min(h - b.r - margin, b.y));
-    }
-  }
-}
+type Body = { id: string; x: number; y: number; vx: number; vy: number; r: number; seed: number };
 
 function Cloud({
   objects, cut, focus, setFocus,
@@ -156,79 +130,126 @@ function Cloud({
   setFocus: (i: number) => void;
 }) {
   const wrap = useRef<HTMLDivElement>(null);
-  const nodes = useRef<(HTMLButtonElement | null)[]>([]);
-  const bodies = useRef<Body[]>([]);
+  const nodes = useRef<Map<string, HTMLButtonElement>>(new Map());
+  const bodies = useRef<Map<string, Body>>(new Map());
+  const list = useRef<ScannedObject[]>(objects);
+  const focusRef = useRef(focus);
   const [chip, setChip] = useState<{ x: number; y: number } | null>(null);
 
-  // Bigger things read bigger, but only gently, so nothing dominates.
-  const weights = useMemo(
-    () => objects.map((o) => {
-      const v = Math.max(1, o.high);
-      return 0.8 + Math.min(0.5, Math.log10(v) / 6);
-    }),
-    [objects]
-  );
+  list.current = objects;
+  focusRef.current = focus;
 
   useEffect(() => {
     const el = wrap.current;
-    if (!el || objects.length === 0) return;
+    if (!el) return;
+    let raf = 0;
+    let w = 0;
+    let h = 0;
+    const still = matchMedia("(prefers-reduced-motion: reduce)").matches;
 
+    // Size each object to fill the space without crowding, and keep any body
+    // that already exists where it is so arriving cutouts do not make it jump.
     const measure = () => {
       const rect = el.getBoundingClientRect();
-      const w = rect.width;
-      const h = rect.height;
-      const n = objects.length;
+      w = rect.width;
+      h = rect.height;
+      const items = list.current;
+      const n = Math.max(1, items.length);
+      const base = Math.sqrt((w * h * 0.40) / (Math.PI * n));
+      const r = Math.min(base, Math.min(w, h) * 0.30);
 
-      // Size the objects so they comfortably fill, never crowd, the space available.
-      const weightSum = weights.reduce((s, x) => s + x * x, 0) || 1;
-      const targetArea = w * h * 0.42;
-      const base = Math.sqrt(targetArea / (Math.PI * weightSum));
-      const cap = Math.min(w, h) * 0.32;
-
-      // Start on a phyllotaxis spiral, which spreads evenly, then relax.
-      bodies.current = objects.map((_, i) => {
-        const angle = i * 2.399963;
-        const rad = Math.sqrt((i + 0.5) / n) * Math.min(w, h) * 0.38;
-        return {
-          x: w / 2 + Math.cos(angle) * rad,
-          y: h / 2 + Math.sin(angle) * rad * 0.92,
-          r: Math.min(cap, base * weights[i]),
-        };
+      const seen = new Set<string>();
+      items.forEach((o, i) => {
+        seen.add(o.id);
+        let b = bodies.current.get(o.id);
+        if (!b) {
+          const angle = i * 2.399963;
+          const rad = Math.sqrt((i + 0.5) / n) * Math.min(w, h) * 0.34;
+          b = {
+            id: o.id,
+            x: w / 2 + Math.cos(angle) * rad,
+            y: h / 2 + Math.sin(angle) * rad,
+            vx: 0, vy: 0, r,
+            seed: i * 1.7 + 0.3,
+          };
+          bodies.current.set(o.id, b);
+        }
+        b.r = r;
+        b.x = Math.max(r, Math.min(w - r, b.x));
+        b.y = Math.max(r, Math.min(h - r, b.y));
+        const node = nodes.current.get(o.id);
+        if (node) node.style.width = node.style.height = `${r * 2}px`;
       });
-
-      relax(bodies.current, w, h, Math.max(14, base * 0.28), 10);
-
-      bodies.current.forEach((b, i) => {
-        const node = nodes.current[i];
-        if (node) node.style.width = node.style.height = `${b.r * 2}px`;
-      });
+      for (const id of [...bodies.current.keys()]) if (!seen.has(id)) bodies.current.delete(id);
     };
 
-    // Selection is over, so the cloud settles and stays put. No drifting.
-    const place = () => {
-      bodies.current.forEach((b, i) => {
-        const node = nodes.current[i];
-        if (!node) return;
-        node.style.transform = `translate(${b.x - b.r}px, ${b.y - b.r}px)`;
-      });
-      const f = bodies.current[focus];
-      if (f) {
-        const rect = el.getBoundingClientRect();
-        const above = f.y - f.r - 18;
-        const below = f.y + f.r + 18;
+    const step = (t: number) => {
+      const bs = [...bodies.current.values()];
+
+      if (!still) {
+        // A slow wander, so the cloud is always breathing.
+        for (const b of bs) {
+          b.vx += Math.cos(t * 0.00019 + b.seed) * 0.010;
+          b.vy += Math.sin(t * 0.00023 + b.seed * 1.3) * 0.010;
+          b.vx *= 0.94;
+          b.vy *= 0.94;
+          b.x += b.vx;
+          b.y += b.vy;
+        }
+
+        // Nothing may sit on top of anything else.
+        for (let i = 0; i < bs.length; i++) {
+          for (let j = i + 1; j < bs.length; j++) {
+            const a = bs[i];
+            const c = bs[j];
+            const dx = c.x - a.x;
+            const dy = c.y - a.y;
+            const d = Math.hypot(dx, dy) || 0.001;
+            const min = a.r + c.r + 10;
+            if (d < min) {
+              const push = (min - d) / 2;
+              const ux = dx / d;
+              const uy = dy / d;
+              a.x -= ux * push; a.y -= uy * push;
+              c.x += ux * push; c.y += uy * push;
+              a.vx -= ux * 0.05; a.vy -= uy * 0.05;
+              c.vx += ux * 0.05; c.vy += uy * 0.05;
+            }
+          }
+        }
+
+        // And nothing leaves the frame.
+        for (const b of bs) {
+          if (b.x < b.r) { b.x = b.r; b.vx = Math.abs(b.vx) * 0.5; }
+          if (b.x > w - b.r) { b.x = w - b.r; b.vx = -Math.abs(b.vx) * 0.5; }
+          if (b.y < b.r) { b.y = b.r; b.vy = Math.abs(b.vy) * 0.5; }
+          if (b.y > h - b.r) { b.y = h - b.r; b.vy = -Math.abs(b.vy) * 0.5; }
+        }
+      }
+
+      for (const b of bs) {
+        const node = nodes.current.get(b.id);
+        if (node) node.style.transform = `translate(${b.x - b.r}px, ${b.y - b.r}px)`;
+      }
+
+      const f = list.current[focusRef.current];
+      const fb = f ? bodies.current.get(f.id) : undefined;
+      if (fb) {
+        const above = fb.y - fb.r - 20;
         setChip({
-          x: Math.max(90, Math.min(rect.width - 90, f.x)),
-          y: above < 34 ? below : above,
+          x: Math.max(96, Math.min(w - 96, fb.x)),
+          y: above < 30 ? fb.y + fb.r + 20 : above,
         });
       }
+      raf = requestAnimationFrame(step);
     };
 
-    const settle = () => { measure(); place(); };
-    settle();
-    const ro = new ResizeObserver(settle);
+    measure();
+    raf = requestAnimationFrame(step);
+    const ro = new ResizeObserver(measure);
     ro.observe(el);
-    return () => ro.disconnect();
-  }, [objects, weights, focus]);
+    return () => { cancelAnimationFrame(raf); ro.disconnect(); };
+  }, [objects.length]);
 
   const current = objects[focus];
 
@@ -237,24 +258,31 @@ function Cloud({
       {objects.map((o, i) => (
         <button
           key={o.id}
-          ref={(n) => { nodes.current[i] = n; }}
+          ref={(n) => {
+            if (n) nodes.current.set(o.id, n);
+            else nodes.current.delete(o.id);
+          }}
           className="obj"
           onClick={() => setFocus(i)}
           aria-label={`${o.name}, ${gbp(o.low)} to ${gbp(o.high)}`}
         >
-          {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img
-            src={o.image}
-            alt=""
-            style={{ mixBlendMode: cut.has(o.id) ? "normal" : "multiply" }}
-          />
+          {o.image ? (
+            /* eslint-disable-next-line @next/next/no-img-element */
+            <img
+              src={o.image}
+              alt=""
+              style={{ mixBlendMode: cut.has(o.id) ? "normal" : "multiply" }}
+            />
+          ) : (
+            <span className="obj-pending" aria-hidden />
+          )}
           <span className="obj-shadow" />
         </button>
       ))}
 
       {chip && current && (
         <span className="chip" style={{ left: chip.x, top: chip.y }}>
-          {current.name}
+          <span className="chip-name">{current.name}</span>
           <span className="chip-price">{gbp(current.low)}–{gbp(current.high)}</span>
         </span>
       )}

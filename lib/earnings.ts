@@ -94,16 +94,24 @@ export function computeEarnings(lots: Lot[]): Earnings {
   };
 }
 
-/** Group lots under their sale, newest sale first, lots in running order. */
+/**
+ * Group lots under their sale, newest sale first, lots in running order.
+ *
+ * Sales where nothing was ever put on the block are left out. A rehearsal that
+ * opened and went nowhere is not a sale, and the seller's record should not be
+ * a wall of empty ones.
+ */
 export function summarise(sales: Sale[], lots: Lot[]): SaleSummary[] {
-  return sales.map((sale) => {
-    const mine = lots.filter((l) => l.sale_id === sale.id).sort((a, b) => a.sort_order - b.sort_order);
-    return {
-      sale,
-      lots: mine,
-      raised: mine.filter(isSold).reduce((sum, l) => sum + Number(l.sold_for), 0),
-      sold: mine.filter(isSold).length,
-      offered: mine.filter(isSettled).length,
-    };
-  });
+  return sales
+    .map((sale) => {
+      const mine = lots.filter((l) => l.sale_id === sale.id).sort((a, b) => a.sort_order - b.sort_order);
+      return {
+        sale,
+        lots: mine,
+        raised: mine.filter(isSold).reduce((sum, l) => sum + Number(l.sold_for), 0),
+        sold: mine.filter(isSold).length,
+        offered: mine.filter(isSettled).length,
+      };
+    })
+    .filter((s) => s.offered > 0);
 }

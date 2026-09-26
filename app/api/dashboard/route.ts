@@ -5,7 +5,10 @@ import { computeEarnings, summarise, type DashboardResponse } from '@/lib/earnin
 // Reads live sale state, so never prerender or cache this.
 export const dynamic = 'force-dynamic';
 
-const MAX_SALES = 20;
+// Look back over plenty of sales, because most of them are rehearsals that
+// never put a lot on the block and get filtered out, then show the real ones.
+const LOOK_BACK = 200;
+const MAX_SHOWN = 20;
 
 /**
  * GET /api/dashboard
@@ -13,12 +16,12 @@ const MAX_SALES = 20;
  */
 export async function GET() {
   const store = db();
-  const sales = await store.recentSales(MAX_SALES);
+  const sales = await store.recentSales(LOOK_BACK);
   const lots = await store.lotsForSales(sales.map((s) => s.id));
 
   const body: DashboardResponse = {
     earnings: computeEarnings(lots),
-    sales: summarise(sales, lots),
+    sales: summarise(sales, lots).slice(0, MAX_SHOWN),
   };
   return ok(body);
 }

@@ -203,7 +203,8 @@ class SupabaseStore implements SaleStore {
 
 // ── Memory backend ──────────────────────────────────────────
 
-const MAX_SALES = 20;
+// Headroom so a busy day of rehearsals cannot crowd out the real one.
+const MAX_SALES = 200;
 
 type Mem = {
   sales: Map<string, Sale>;
@@ -234,18 +235,27 @@ function stamp(): string {
   return new Date(now).toISOString();
 }
 
+/**
+ * Drop the oldest FINISHED sale when we run out of room.
+ *
+ * A sale that is still running is never evicted, whatever the pressure. The
+ * previous version took the oldest sale regardless of phase, so a handful of
+ * requests could delete a live auction out from under the people bidding in it.
+ * If every sale is still live we simply keep them all and let memory grow.
+ */
 function evict() {
   while (mem.sales.size > MAX_SALES) {
     let oldestId: string | null = null;
     let oldestAt = Infinity;
     for (const s of mem.sales.values()) {
+      if (s.phase !== 'ended') continue; // never evict a sale in progress
       const at = new Date(s.created_at).getTime();
       if (at < oldestAt) {
         oldestAt = at;
         oldestId = s.id;
       }
     }
-    if (!oldestId) return;
+    if (!oldestId) return; // nothing finished to reclaim; keep everything
     const sale = mem.sales.get(oldestId)!;
     mem.sales.delete(oldestId);
     mem.byCode.delete(sale.code);

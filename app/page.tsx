@@ -18,6 +18,9 @@ export default function ScanScreen() {
   const videoRef = useRef<HTMLVideoElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
+  const dead = useRef(false);
+  const stillRef = useRef<HTMLImageElement>(null);
+  const [fit, setFit] = useState<{ left: number; top: number; w: number; h: number } | null>(null);
   const [stillUrl, setStillUrl] = useState<string | null>(null);
   const [name, setName] = useState<string | null>(null);
   const [draftName, setDraftName] = useState("");
@@ -29,31 +32,62 @@ export default function ScanScreen() {
   const [note, setNote] = useState<string | null>(null);
   const [facing, setFacing] = useState<"environment" | "user">("environment");
 
+  /** Where the contained photo really is inside its box, so markers can follow it. */
+  const measureStill = useCallback(() => {
+    const img = stillRef.current;
+    if (!img || !img.naturalWidth) return;
+    const box = img.getBoundingClientRect();
+    const scale = Math.min(box.width / img.naturalWidth, box.height / img.naturalHeight);
+    const w = img.naturalWidth * scale;
+    const h = img.naturalHeight * scale;
+    setFit({ left: (box.width - w) / 2, top: (box.height - h) / 2, w, h });
+  }, []);
+
+  useEffect(() => {
+    if (phase === "live") return;
+    measureStill();
+  }, [measureStill, dots, phase]);
+
+  const attach = useCallback((stream: MediaStream | null) => {
+    const v = videoRef.current;
+    if (!v || !stream) return;
+    if (v.srcObject !== stream) v.srcObject = stream;
+    v.play().catch(() => {});
+  }, []);
+
   const start = useCallback(async (mode: "environment" | "user") => {
+    if (!navigator.mediaDevices?.getUserMedia) { setCameraOn(false); return; }
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
         video: { facingMode: { ideal: mode } },
         audio: false,
       });
+      if (dead.current) { stream.getTracks().forEach((t) => t.stop()); return; }
       streamRef.current?.getTracks().forEach((t) => t.stop());
       streamRef.current = stream;
-      if (videoRef.current) {
-        videoRef.current.srcObject = stream;
-        await videoRef.current.play().catch(() => {});
-      }
       setCameraOn(true);
+      attach(stream);
     } catch {
-      setCameraOn(false); // fall back to the sample room still
+      setCameraOn(false);
     }
-  }, []);
+  }, [attach]);
 
   useEffect(() => {
+    dead.current = false;
     // Off the effect body so the permission prompt never blocks the first paint.
-    const pending = Promise.resolve().then(() => start(facing));
-    return () => {
-      pending.finally(() => streamRef.current?.getTracks().forEach((t) => t.stop()));
-    };
+    void Promise.resolve().then(() => start(facing));
+    return () => { dead.current = true; };
   }, [facing, start]);
+
+  // The <video> is always in the tree, so the stream has something to attach to
+  // even on the first pass. Re-attach whenever React re-renders it.
+  useEffect(() => { attach(streamRef.current); }, [attach, cameraOn, name]);
+
+  // Stop the hardware only when the screen itself goes away.
+  useEffect(() => () => {
+    streamRef.current?.getTracks().forEach((t) => t.stop());
+    streamRef.current = null;
+  }, []);
 
   useEffect(() => { setName(loadName()); }, []);
 
@@ -96,6 +130,7 @@ export default function ScanScreen() {
     if (source instanceof Blob) {
       form.append("frame", source, "room.jpg");
       saveFrame(source);
+      setStillUrl(URL.createObjectURL(source));
     } else {
       form.append("sampleUrl", source.sampleUrl);
       saveFrame(source.sampleUrl);
@@ -160,22 +195,47 @@ export default function ScanScreen() {
   return (
     <main className="shell" style={{ background: "#0d0d0d" }}>
       <div className="cam">
-        {cameraOn ? (
-          <video
-            ref={videoRef}
-            playsInline
-            muted
-            autoPlay
-            style={{ filter: frozen ? "brightness(.92)" : undefined, transition: "filter .3s ease" }}
-          />
-        ) : (
-          /* eslint-disable-next-line @next/next/no-img-element */
-          <img
-            className="cam-still"
-            src={stillUrl ?? SAMPLE_ROOM}
-            alt={stillUrl ? "Your room" : "Sample room"}
-            style={{ filter: frozen ? "brightness(.92)" : undefined, transition: "filter .3s ease" }}
-          />
+        <video
+          ref={videoRef}
+          playsInline
+          muted
+          autoPlay
+          style={{
+            transition: "filter .3s ease",
+            opacity: cameraOn && !frozen ? 1 : 0,
+          }}
+        />
+
+        {/* Once captured we show the exact frame we scanned, whole and uncropped,
+            so the markers land on the objects rather than on a cover-crop of them. */}
+        {frozen && stillUrl && (
+          <div style={{ position: "absolute", inset: 0, background: "#0d0d0d" }}>
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img
+              ref={stillRef}
+              src={stillUrl}
+              alt="Your room"
+              onLoad={measureStill}
+              style={{ width: "100%", height: "100%", objectFit: "contain", display: "block", filter: "brightness(.92)" }}
+            />
+          </div>
+        )}
+        {!cameraOn && !frozen && (
+          <div style={{ position: "absolute", inset: 0, display: "grid", placeItems: "center", background: "#0d0d0d" }}>
+            {stillUrl ? (
+              /* eslint-disable-next-line @next/next/no-img-element */
+              <img
+                className="cam-still"
+                src={stillUrl}
+                alt="Your room"
+                style={{ filter: frozen ? "brightness(.92)" : undefined, transition: "filter .3s ease" }}
+              />
+            ) : (
+              <p className="meta" style={{ color: "rgba(255,255,255,.7)", textAlign: "center", padding: 24 }}>
+                Tap the button to photograph your room
+              </p>
+            )}
+          </div>
         )}
 
         {/* scan sweep */}
@@ -192,7 +252,15 @@ export default function ScanScreen() {
 
         {/* detection dots */}
         {spots.slice(0, dots).map((h, i) => (
-          <span key={i} className="dot" style={{ left: `${h.x * 100}%`, top: `${h.y * 100}%` }} />
+          <span
+            key={i}
+            className="dot"
+            style={
+              fit
+                ? { left: fit.left + h.x * fit.w, top: fit.top + h.y * fit.h }
+                : { left: `${h.x * 100}%`, top: `${h.y * 100}%` }
+            }
+          />
         ))}
 
         {/* top controls */}

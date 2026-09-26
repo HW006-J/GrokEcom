@@ -120,7 +120,13 @@ export async function cropCutout(
   opts: { pad?: number; longEdge?: number; format?: 'png' | 'webp'; quality?: number } = {}
 ): Promise<Buffer> {
   const { pad = 0.06, longEdge = 700, format = 'png', quality = 80 } = opts;
-  const img = sharp(frame, { failOn: 'none' }).rotate();
+
+  // Apply EXIF orientation into a real buffer FIRST, then measure that.
+  // metadata() on the source reports pre-rotation dimensions, so a phone photo
+  // held in portrait (EXIF orientation 5-8) transposes the pipeline and every
+  // extract region computed from those numbers is invalid.
+  const upright = await sharp(frame, { failOn: 'none' }).rotate().toBuffer();
+  const img = sharp(upright, { failOn: 'none' });
   const meta = await img.metadata();
   const W = meta.width ?? 0;
   const H = meta.height ?? 0;

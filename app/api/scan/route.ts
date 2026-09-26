@@ -1,4 +1,5 @@
 import type { NextRequest } from 'next/server';
+import sharp from 'sharp';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { ok, fail } from '@/lib/api';
 import { supabaseServer } from '@/lib/supabase';
@@ -140,6 +141,26 @@ async function cutout(
     return `data:image/webp;base64,${webp.toString('base64')}`;
   } catch (e) {
     console.warn('cutout failed for', d.name, e instanceof Error ? e.message : e);
-    return '';
+  }
+
+  // Never hand back an empty string: the browser resolves <img src=""> to the
+  // page itself and renders a broken image, and /api/cutout rejects it, so the
+  // lot can never recover. Fall back to the whole frame instead.
+  try {
+    const whole = await sharp(frame, { failOn: 'none' })
+      .rotate()
+      .resize({ width: 420, height: 420, fit: 'inside', withoutEnlargement: true })
+      .webp({ quality: 70 })
+      .toBuffer();
+    return `data:image/webp;base64,${whole.toString('base64')}`;
+  } catch {
+    return FALLBACK_IMAGE;
   }
 }
+
+/** Last resort: a plain neutral tile, so nothing ever renders as a broken image. */
+const FALLBACK_IMAGE =
+  'data:image/svg+xml;base64,' +
+  Buffer.from(
+    '<svg xmlns="http://www.w3.org/2000/svg" width="420" height="420"><rect width="420" height="420" fill="#f2f2f0"/></svg>'
+  ).toString('base64');

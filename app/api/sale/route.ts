@@ -23,38 +23,69 @@ type NewLot = {
 
 type Body = { lotIds?: string[]; lots?: NewLot[]; title?: string };
 
+/** A lot name is read aloud and printed on a card; keep it sane. */
+const NAME_MAX = 80;
+
+const cleanName = (v: unknown): string | null => {
+  if (typeof v !== 'string') return null;
+  const n = v.trim().slice(0, NAME_MAX);
+  return n.length ? n : null;
+};
+
 export async function POST(request: Request) {
   const body = (await request.json().catch(() => null)) as Body | null;
-  const lotIds = body?.lotIds?.filter(Boolean) ?? [];
-  const seeds = body?.lots ?? [];
+
+  const rawIds = body?.lotIds;
+  const rawSeeds = body?.lots;
+  if (rawIds !== undefined && !Array.isArray(rawIds)) return fail('lotIds must be an array');
+  if (rawSeeds !== undefined && !Array.isArray(rawSeeds)) return fail('lots must be an array');
+
+  const lotIds = (rawIds ?? []).filter((id): id is string => typeof id === 'string' && id.length > 0);
+  const seeds = (rawSeeds ?? []).filter((s): s is NewLot => Boolean(s) && typeof s === 'object');
   if (lotIds.length === 0 && seeds.length === 0) return fail('lotIds or lots are required');
+
+  // Every seeded lot needs a name: the auctioneer says it out loud, and a
+  // nameless lot can throw inside the LLM-failure fallback and go silent.
+  const named = seeds.map((s) => ({ ...s, name: cleanName(s.name) }));
+  if (named.some((s) => s.name === null)) return fail('every lot needs a name');
 
   const store = db();
 
-  // Unique-ish code; retry a couple of times on collision.
-  let sale: Sale | null = null;
+  // Resolve existing lots BEFORE opening a sale. Creating the sale first meant a
+  // request that ended in 404 still consumed a slot and evicted a live auction.
+  let existing: Lot[] = [];
   try {
-    for (let attempt = 0; attempt < 4 && !sale; attempt++) {
-      sale = await store.createSale({ code: makeCode(), title: body?.title?.trim() || 'The Sellout' });
-    }
+    if (lotIds.length) existing = await store.lotsByIds(lotIds);
   } catch (e) {
-    return fail(e instanceof Error ? e.message : 'could not open a sale', 500);
+    return fail(e instanceof Error ? e.message : 'could not read those lots', 500);
   }
-  if (!sale) return fail('could not open a sale', 500);
+  if (existing.length === 0 && named.length === 0) return fail('none of those lots exist', 404);
+
+  // Unique-ish code; retry a couple of times on collision, including when the
+  // store signals one by throwing a unique violation rather than returning null.
+  let sale: Sale | null = null;
+  let lastError: unknown = null;
+  for (let attempt = 0; attempt < 4 && !sale; attempt++) {
+    try {
+      sale = await store.createSale({ code: makeCode(), title: body?.title?.trim().slice(0, 120) || 'The Sellout' });
+    } catch (e) {
+      lastError = e;
+    }
+  }
+  if (!sale) return fail(lastError instanceof Error ? lastError.message : 'could not open a sale', 500);
 
   // Attach lots in the order they were given.
   const attached: Lot[] = [];
 
   try {
-    if (lotIds.length) {
-      const rows = await store.lotsByIds(lotIds);
-      const byId = new Map(rows.map((r) => [r.id, r]));
+    if (existing.length) {
+      const byId = new Map(existing.map((r) => [r.id, r]));
       let order = 0;
       for (const id of lotIds) {
-        const existing = byId.get(id);
-        if (!existing) continue;
+        const row = byId.get(id);
+        if (!row) continue;
         order += 1;
-        const updated = await store.updateLot(existing.id, {
+        const updated = await store.updateLot(row.id, {
           sale_id: sale.id,
           status: 'queued',
           sort_order: order,
@@ -64,11 +95,11 @@ export async function POST(request: Request) {
       }
     }
 
-    if (seeds.length) {
+    if (named.length) {
       const base = attached.length;
-      const rows: NewLotRow[] = seeds.map((s, i) => ({
+      const rows: NewLotRow[] = named.map((s, i) => ({
         sale_id: sale.id,
-        name: s.name,
+        name: s.name as string,
         category: s.category ?? 'Other',
         condition: s.condition,
         blurb: s.blurb,
