@@ -33,7 +33,7 @@ export async function POST(request: Request) {
   // 1. Upload photos
   const imageUrls: string[] = [];
   const imageBlocks: OpenAI.Chat.Completions.ChatCompletionContentPart[] = [];
-  for (const photo of photos.slice(0, 4)) {
+  for (const photo of photos.slice(0, 5)) {
     const buf = Buffer.from(await photo.arrayBuffer());
     const ext = (photo.type.split('/')[1] || 'jpg').replace('jpeg', 'jpg');
     const path = `${showId}/${Date.now()}-${Math.random().toString(36).slice(2, 8)}.${ext}`;
