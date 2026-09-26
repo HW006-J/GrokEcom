@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import { lotToObject, type ScannedObject } from "@/lib/mock";
 import { loadName, saveFrame, saveName, saveObjects } from "@/lib/store";
 import type { ScanResponse } from "@/lib/types";
-import { X, Flash, Flip, ChevronUp, Scan } from "@/components/icons";
+import { Flash, Flip, ChevronUp, Scan, List } from "@/components/icons";
 
 const SAMPLE_ROOM =
   "https://images.unsplash.com/photo-1586023492125-27b2c045efd7?w=1200&q=80";
@@ -200,7 +200,9 @@ export default function ScanScreen() {
           className="safe-t"
           style={{ position: "absolute", insetInline: 0, top: 0, display: "flex", justifyContent: "space-between", paddingInline: 18 }}
         >
-          <button className="icon-btn" aria-label="Close"><X size={18} /></button>
+          <button className="icon-btn" aria-label="Your sales" onClick={() => router.push("/dashboard")}>
+            <List size={18} />
+          </button>
           <button className="icon-btn" aria-label="Flash"><Flash size={18} /></button>
         </div>
 
