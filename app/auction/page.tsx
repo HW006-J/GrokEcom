@@ -611,9 +611,19 @@ function ShareSheet({ url, code, name, onClose }: { url: string; code: string | 
       <div
         onClick={(e) => e.stopPropagation()}
         className="fade-in safe-b"
-        style={{ width: "100%", background: "#fff", borderRadius: "26px 26px 0 0", padding: "22px 22px 12px" }}
+        style={{ position: "relative", width: "100%", background: "#fff", borderRadius: "26px 26px 0 0", padding: "22px 22px 12px" }}
       >
-        <div style={{ width: 38, height: 4, borderRadius: 999, background: "var(--line-2)", margin: "0 auto 18px" }} />
+        <div style={{ width: 38, height: 4, borderRadius: 999, background: "var(--line-2)", margin: "0 auto 14px" }} />
+        {/* The backdrop is a thin strip above a full-width sheet on a phone, so
+            there has to be a button you can actually hit to get out of here. */}
+        <button
+          onClick={onClose}
+          aria-label="Close"
+          className="icon-btn icon-btn--light"
+          style={{ position: "absolute", right: 18, top: 16 }}
+        >
+          <X size={18} />
+        </button>
         <h3 className="title" style={{ textAlign: "center" }}>Bring people in</h3>
         <p className="sub" style={{ textAlign: "center", marginTop: 6 }}>
           {code ? <>Anyone with the link can bid. Room code <strong>{code}</strong>.</> : "Anyone with the link can bid. No app needed."}
