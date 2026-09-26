@@ -113,8 +113,8 @@ export default function JoinPage({ params }: { params: Promise<{ code: string }>
 
   const high = sale?.high_bid === null || sale?.high_bid === undefined ? null : Number(sale.high_bid);
   const shown = high ?? opening;
-  const left = sale?.lot_ends_at ? Math.max(0, Math.round((new Date(sale.lot_ends_at).getTime() - now) / 1000)) : 0;
-  const biddingOpen = sale?.phase === "bidding" && left > 0;
+  const left = sale?.lot_ends_at ? Math.max(0, Math.round((new Date(sale.lot_ends_at).getTime() - (sale?.paused_at ?? now)) / 1000)) : 0;
+  const biddingOpen = sale?.phase === "bidding" && sale?.paused_at == null && left > 0;
   const iLead = Boolean(name && sale?.high_bidder === name);
   const settled = lot?.status === "sold" || lot?.status === "unsold";
   const iWon = Boolean(lot?.status === "sold" && name && lot.sold_to === name);
@@ -130,7 +130,7 @@ export default function JoinPage({ params }: { params: Promise<{ code: string }>
   useEffect(() => {
     if (!name) return;
     if (iLead) { wasLeading.current = true; return; }
-    if (wasLeading.current && sale?.phase === "bidding" && sale.high_bidder) {
+    if (wasLeading.current && sale?.phase === "bidding" && sale?.paused_at == null && sale.high_bidder) {
       wasLeading.current = false;
       setToast(`${sale.high_bidder} outbid you at ${gbp(Number(sale.high_bid ?? 0))}`);
       setTimeout(() => setToast(null), 2400);
@@ -236,13 +236,13 @@ export default function JoinPage({ params }: { params: Promise<{ code: string }>
 
   if (sale?.phase === "idle" || sale?.phase === "presenting") {
     const countdown = sale.phase === "presenting";
-    const seconds = Math.max(0, Math.ceil((Date.parse(sale.lot_ends_at ?? "") - now) / 1000));
+    const seconds = Math.max(0, Math.ceil((Date.parse(sale.lot_ends_at ?? "") - (sale.paused_at ?? now)) / 1000));
     const untilStart = sale.starts_at ? Math.max(0, Math.ceil((Date.parse(sale.starts_at) - now) / 1000)) : null;
-    return <main className="shell bidder-lobby"><EnableWinSound/>
+    return <main className="shell bidder-lobby"><EnableWinSound/>{sale?.paused_at != null && <p role="status" style={{textAlign:"center",padding:12}}>Auction paused</p>}
       <header className="review-header safe-t"><div><h1>{countdown ? "Get ready." : "You’re in."}</h1><p>Room {room} · {name}</p></div></header>
       {!countdown && <WaitingOrbit lots={lots}/>}
       <div className="lobby-center" role="status">
-        {countdown ? <><span>Bidding starts in</span><strong key={seconds} className="lobby-number">{seconds || "…"}</strong><p>{lot?.name}</p></> : untilStart !== null ? <><span>Auction starts in</span><strong key={untilStart} className="lobby-number">{untilStart ? `${Math.floor(untilStart / 60)}:${String(untilStart % 60).padStart(2, "0")}` : "…"}</strong></> : <><span className="lobby-pulse"/><h2>Starting soon.</h2></>}
+        {countdown ? <><span>{sale.paused_at != null ? "Auction paused" : "Bidding starts in"}</span><strong key={seconds} className="lobby-number">{seconds || "…"}</strong><p>{lot?.name}</p></> : untilStart !== null ? <><span>Auction starts in</span><strong key={untilStart} className="lobby-number">{untilStart ? `${Math.floor(untilStart / 60)}:${String(untilStart % 60).padStart(2, "0")}` : "…"}</strong></> : <><span className="lobby-pulse"/><h2>Starting soon.</h2></>}
       </div>
       <p className="lobby-note">{countdown ? "" : "Waiting for the host"}</p>
     </main>;
@@ -259,7 +259,7 @@ export default function JoinPage({ params }: { params: Promise<{ code: string }>
     : "That's the sale";
 
   return (
-    <main className="shell"><EnableWinSound/>
+    <main className="shell"><EnableWinSound/>{sale?.paused_at != null && <p role="status" style={{textAlign:"center",padding:12}}>Auction paused</p>}
       <header className="pad safe-t" style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
         <span className="meta">Room {room} · {status}</span>
         <span style={{ display: "inline-flex", alignItems: "center", gap: 5, color: "var(--ink-2)", fontSize: 13 }}>

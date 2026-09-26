@@ -1,13 +1,15 @@
 /* eslint-disable @next/next/no-img-element */
 "use client";
 
-import { use, useState, type FormEvent } from "react";
+import { use, useState, type CSSProperties, type FormEvent, type ReactNode } from "react";
 import Link from "next/link";
-import styles from "../marketplace.module.css";
 import { CONDITIONS } from "@/lib/mock-marketplaces";
+import { DemoPill, EBAY, EbayHeader, FB, Icon, ICONS } from "../../platform-ui";
 
-// Demo sell form. The browser agent (lib/browser-lister.ts) fills it in; a
-// person can too. Submitting creates a mock listing, never a real one.
+// Demo sell form, styled after eBay's "Complete your listing" and Facebook's
+// "Item for sale" forms. The browser agent (lib/browser-lister.ts) fills it
+// in; a person can too. Submitting creates a mock listing, never a real one.
+// The agent finds fields by label and the submit button by #publish.
 
 /** Shrinks big cutouts so the in-memory listing stays small; keeps transparency. */
 function toDataUrl(file: File): Promise<string> {
@@ -30,11 +32,9 @@ function toDataUrl(file: File): Promise<string> {
 export default function MockSellForm({ params }: { params: Promise<{ platform: string }> }) {
   const { platform } = use(params);
   const ebay = platform === "ebay";
-  const [title, setTitle] = useState("");
-  const [price, setPrice] = useState("");
-  const [condition, setCondition] = useState("");
   const [photo, setPhoto] = useState<File | null>(null);
   const [preview, setPreview] = useState("");
+  const [titleLength, setTitleLength] = useState(0);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
 
@@ -48,7 +48,8 @@ export default function MockSellForm({ params }: { params: Promise<{ platform: s
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    const lotId = new URLSearchParams(location.search).get("lot");
+    const search = new URLSearchParams(location.search);
+    const lotId = search.get("lot");
     if (!lotId) { setError("Open this form from your dashboard so it knows which item to list."); return; }
     const data = new FormData(event.currentTarget);
     setBusy(true);
@@ -63,7 +64,7 @@ export default function MockSellForm({ params }: { params: Promise<{ platform: s
           condition: String(data.get("condition") || ""),
           price: Number(data.get("price")) || undefined,
           imageDataUrl: photo ? await toDataUrl(photo) : undefined,
-          via: navigator.webdriver ? "browser" : undefined,
+          jobId: search.get("job") || undefined,
         }),
       });
       const result = await response.json();
@@ -75,26 +76,120 @@ export default function MockSellForm({ params }: { params: Promise<{ platform: s
     }
   }
 
-  return <main className={styles.workspace} data-market={platform}>
-    <header className={styles.header}><Link href="/dashboard" className={ebay ? styles.ebay : styles.facebook}>{ebay ? "ebay" : "f"}</Link><span className={styles.search}>Search {ebay ? "eBay" : "Facebook"}</span><strong className={styles.headerTitle}>Marketplace</strong><span className={styles.demo}>Demo · local only</span></header>
-    <div className={styles.editor}>
-    <form onSubmit={submit} className={styles.form}>
-      <Link href="/dashboard" className={styles.back} aria-label="Back to dashboard"><svg width="12" height="22" viewBox="0 0 12 22" fill="none" aria-hidden="true"><path d="M10 2 2 11l8 9" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"/></svg><span>Dashboard</span></Link>
-      <h1>{ebay ? "Create your listing" : "Item for sale"}</h1>
-      <div className={styles.seller}><span className={styles.avatar}>S</span><div><strong>Your listing</strong><small>Marketplace · Public preview</small></div></div>
-      <PhotoPicker preview={preview} onPick={pick} />
-      <label className={styles.field} htmlFor="title"><span>Title</span><input id="title" name="title" required maxLength={120} value={title} onChange={e => setTitle(e.target.value)} placeholder="What are you selling?" /></label>
-      <label className={styles.field} htmlFor="price"><span>Price (£)</span><input id="price" name="price" required type="number" inputMode="numeric" min={1} max={100000} step={1} value={price} onChange={e => setPrice(e.target.value)} placeholder="0" /></label>
-      <label className={styles.field} htmlFor="condition"><span>Condition</span><select aria-label="Condition" id="condition" name="condition" required value={condition} onChange={e => setCondition(e.target.value)}><option value="" disabled>Select condition</option>{CONDITIONS.map(c => <option key={c}>{c}</option>)}</select></label>
-      <p className={styles.notice}>Only published to this demo marketplace.</p>
-      {error && <p role="alert" className={styles.error}>{error}</p>}
-      <button className={styles.publish} type="submit" disabled={busy}>{busy ? "Publishing…" : ebay ? "Publish listing" : "Publish"}</button>
+  const photoInput = <input type="file" accept="image/*" onChange={(event) => pick(event.target.files?.[0] ?? null)} style={{ position: "absolute", width: 1, height: 1, opacity: 0 }} />;
+  const errorLine = error && <p role="alert" style={{ fontSize: 14, color: "#e0103a", margin: "16px 0 0" }}>{error}</p>;
+
+  if (ebay) return <main className="shell" style={{ background: "#fff", fontFamily: EBAY.font, color: EBAY.ink }}>
+    <EbayHeader />
+    <form onSubmit={submit} style={{ overflowY: "auto", flex: 1, padding: "0 16px 32px" }}>
+      <h1 style={{ fontSize: 24, fontWeight: 700, margin: "18px 0 4px" }}>Complete your listing</h1>
+      <p style={{ fontSize: 14, color: EBAY.ink2, margin: 0 }}>It&apos;s free to sell on eBay. Demo form: nothing is posted.</p>
+
+      <EbaySection title="Photos & video">
+        <p style={{ fontSize: 13, color: EBAY.ink2, margin: "0 0 10px" }}>You can add up to 24 photos.</p>
+        <label style={{ position: "relative", display: "grid", placeItems: "center", minHeight: 150, border: `2px dashed ${EBAY.fieldLine}`, borderRadius: 16, background: EBAY.grey, cursor: "pointer", overflow: "hidden" }}>
+          {preview ? <img src={preview} alt="Attached item photo" style={{ height: 150, maxWidth: "100%", objectFit: "contain", mixBlendMode: "multiply" }} />
+            : <span style={{ display: "grid", justifyItems: "center", gap: 6 }}><Icon d={ICONS.camera} size={30} /><span style={{ fontSize: 15, fontWeight: 700, color: EBAY.blue }}>Add photos</span><span style={{ fontSize: 12, color: EBAY.ink2 }}>or drag and drop</span></span>}
+          {photoInput}
+        </label>
+      </EbaySection>
+
+      <EbaySection title="Title">
+        <label htmlFor="title" style={ebayLabel}>Item title</label>
+        <input id="title" name="title" required maxLength={80} onInput={(event) => setTitleLength(event.currentTarget.value.length)} style={ebayField} />
+        <span style={{ display: "block", textAlign: "right", fontSize: 12, color: EBAY.ink2, marginTop: 4 }}>{titleLength}/80</span>
+      </EbaySection>
+
+      <EbaySection title="Condition">
+        <label htmlFor="condition" style={ebayLabel}>Item condition</label>
+        <select id="condition" name="condition" required defaultValue="" style={{ ...ebayField, appearance: "auto" }}>
+          <option value="" disabled>Select</option>
+          {CONDITIONS.map((condition) => <option key={condition}>{condition}</option>)}
+        </select>
+      </EbaySection>
+
+      <EbaySection title="Pricing">
+        <span style={ebayLabel}>Format</span>
+        <div style={{ display: "flex", border: `1px solid ${EBAY.fieldLine}`, borderRadius: 24, overflow: "hidden", marginBottom: 14 }}>
+          <span style={{ flex: 1, textAlign: "center", padding: "10px 0", fontSize: 14 }}>Auction</span>
+          <span style={{ flex: 1, textAlign: "center", padding: "10px 0", fontSize: 14, fontWeight: 700, background: EBAY.ink, color: "#fff", borderRadius: 24 }}>Buy it now</span>
+        </div>
+        <label htmlFor="price" style={ebayLabel}>Item price</label>
+        <div style={{ ...ebayField, display: "flex", alignItems: "center", gap: 6, padding: "0 12px" }}>
+          <span style={{ color: EBAY.ink2 }}>£</span>
+          <input id="price" name="price" required type="number" inputMode="numeric" min={1} max={100000} step={1} style={{ flex: 1, minWidth: 0, border: 0, background: "transparent", font: "inherit", fontSize: 16, height: "100%", outline: "none" }} />
+        </div>
+      </EbaySection>
+
+      <EbaySection title="Delivery">
+        <p style={{ fontSize: 14, margin: 0 }}>Collection in person</p>
+        <p style={{ fontSize: 12, color: EBAY.ink2, margin: "4px 0 0" }}>Buyers collect from your postcode area.</p>
+      </EbaySection>
+
+      {errorLine}
+      <button id="publish" type="submit" disabled={busy} style={{ width: "100%", minHeight: 48, marginTop: 24, borderRadius: 24, background: EBAY.blue, color: "#fff", fontSize: 16, fontWeight: 700, fontFamily: EBAY.font, opacity: busy ? .6 : 1 }}>{busy ? "Listing…" : "List it"}</button>
+      <button type="button" style={{ width: "100%", minHeight: 48, marginTop: 10, borderRadius: 24, border: `1px solid ${EBAY.blue}`, color: EBAY.blue, background: "#fff", fontSize: 16, fontFamily: EBAY.font }}>Save for later</button>
+      <p style={{ fontSize: 12, color: EBAY.ink2, textAlign: "center", margin: "14px 0 0" }}>Demo of eBay&apos;s listing form for The Sellout. Not affiliated with eBay.</p>
     </form>
-    <section className={styles.previewArea} aria-label="Listing preview"><h2>Preview</h2><div className={styles.previewCard}><div className={styles.previewImage}>{preview ? <img src={preview} alt="Item preview" /> : <div className={styles.empty}><span>▧</span>Your listing preview<small>Add a photo to bring it to life.</small></div>}</div><div className={styles.previewDetails}><h2>{title || "Your item title"}</h2><p className={styles.price}>{price ? `£${price}` : "£0"}</p><p className={styles.muted}>Listed just now · London</p><hr /><h3>Details</h3><p>Condition <strong>{condition || "Not specified"}</strong></p><p className={styles.muted}>Your item is ready for a new home.</p><div className={styles.map}>London<span>⌖</span><small>Approximate location</small></div><h3>Seller information</h3><div className={styles.seller}><span className={styles.avatar}>S</span><strong>You</strong></div></div></div></section>
-    </div>
+  </main>;
+
+  return <main className="shell" style={{ background: "#fff", fontFamily: FB.font, color: FB.ink }}>
+    <header style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 8px 8px 4px", borderBottom: `1px solid ${FB.button}` }}>
+      <Link href="/dashboard" aria-label="Close" style={{ width: 44, height: 44, display: "grid", placeItems: "center", color: FB.ink }}><Icon d={ICONS.close} size={22} /></Link>
+      <div style={{ flex: 1 }}>
+        <div style={{ fontSize: 12, color: FB.ink2 }}>Marketplace</div>
+        <h1 style={{ fontSize: 20, fontWeight: 700, margin: 0 }}>Item for sale</h1>
+      </div>
+      <DemoPill />
+    </header>
+    <form onSubmit={submit} style={{ overflowY: "auto", flex: 1, padding: "12px 16px 28px" }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+        <span style={{ width: 40, height: 40, borderRadius: 99, background: FB.button }} />
+        <div><div style={{ fontSize: 15, fontWeight: 600 }}>You</div><div style={{ fontSize: 13, color: FB.ink2 }}>Listing to Marketplace · Public</div></div>
+      </div>
+      <p style={{ fontSize: 15, color: FB.ink2, margin: "16px 0 8px" }}>Photos · {photo ? 1 : 0} / 10 · You can add up to 10 photos.</p>
+      <label style={{ position: "relative", display: "grid", placeItems: "center", minHeight: 170, borderRadius: 8, border: `1px solid ${FB.line}`, background: "#fff", cursor: "pointer", overflow: "hidden" }}>
+        {preview ? <img src={preview} alt="Attached item photo" style={{ height: 170, maxWidth: "100%", objectFit: "contain", mixBlendMode: "multiply" }} />
+          : <span style={{ display: "grid", justifyItems: "center", gap: 4 }}>
+            <span style={{ width: 40, height: 40, borderRadius: 99, background: FB.button, display: "grid", placeItems: "center" }}><Icon d={ICONS.photo} size={20} /></span>
+            <span style={{ fontSize: 17, fontWeight: 600 }}>Add photos</span><span style={{ fontSize: 13, color: FB.ink2 }}>or drag and drop</span>
+          </span>}
+        {photoInput}
+      </label>
+
+      <h2 style={{ fontSize: 17, fontWeight: 600, margin: "20px 0 0" }}>Required</h2>
+      <p style={{ fontSize: 15, color: FB.ink2, margin: "2px 0 12px" }}>Be as descriptive as possible.</p>
+      <FbField id="title" label="Title"><input id="title" name="title" required maxLength={100} style={fbInput} /></FbField>
+      <FbField id="price" label="Price"><input id="price" name="price" required type="number" inputMode="numeric" min={1} max={100000} step={1} style={fbInput} /></FbField>
+      <FbField id="condition" label="Condition">
+        <select id="condition" name="condition" required defaultValue="" style={{ ...fbInput, appearance: "auto", marginLeft: -4 }}>
+          <option value="" disabled></option>
+          {CONDITIONS.map((condition) => <option key={condition}>{condition}</option>)}
+        </select>
+      </FbField>
+      <FbField id="description" label="Description (optional)"><textarea id="description" name="description" rows={3} style={{ ...fbInput, resize: "none" }} /></FbField>
+
+      {errorLine}
+      <button id="publish" type="submit" disabled={busy} style={{ width: "100%", minHeight: 44, marginTop: 16, borderRadius: 6, background: FB.blue, color: "#fff", fontSize: 15, fontWeight: 600, fontFamily: FB.font, opacity: busy ? .6 : 1 }}>{busy ? "Publishing…" : "Publish"}</button>
+      <p style={{ fontSize: 12, color: FB.ink2, textAlign: "center", margin: "14px 0 0" }}>Demo of Marketplace&apos;s listing form for The Sellout. Not affiliated with Meta.</p>
+    </form>
   </main>;
 }
 
-function PhotoPicker({ preview, onPick }: { preview: string; onPick: (file: File | null) => void }) {
-  return <div className={styles.photoSection}><p>Photos <span>· {preview ? "1" : "0"}/10</span></p><label className={styles.photoPicker}>{preview ? <img src={preview} alt="Attached item photo" /> : <span className={styles.photoIcon}>＋</span>}<strong>Add photo</strong><small>Upload from your device</small><input aria-label="Add photo" type="file" accept="image/*" onChange={event => onPick(event.target.files?.[0] ?? null)} /></label></div>;
+const ebayLabel: CSSProperties = { display: "block", fontSize: 14, fontWeight: 700, margin: "0 0 6px" };
+const ebayField: CSSProperties = { width: "100%", height: 48, border: `1px solid ${EBAY.fieldLine}`, borderRadius: 8, padding: "0 12px", fontSize: 16, background: EBAY.field, color: EBAY.ink, fontFamily: EBAY.font };
+const fbInput: CSSProperties = { display: "block", width: "100%", border: 0, background: "transparent", fontSize: 16, color: FB.ink, fontFamily: FB.font, outline: "none", padding: 0 };
+
+function EbaySection({ title, children }: { title: string; children: ReactNode }) {
+  return <section style={{ borderTop: `1px solid ${EBAY.line}`, marginTop: 20, paddingTop: 18 }}>
+    <h2 style={{ fontSize: 16, fontWeight: 700, textTransform: "uppercase", letterSpacing: ".02em", margin: "0 0 12px" }}>{title}</h2>
+    {children}
+  </section>;
+}
+
+function FbField({ id, label, children }: { id: string; label: string; children: ReactNode }) {
+  return <div style={{ border: `1px solid ${FB.line}`, borderRadius: 6, padding: "8px 12px 10px", marginBottom: 12, minHeight: 56 }}>
+    <label htmlFor={id} style={{ display: "block", fontSize: 12, color: FB.ink2, marginBottom: 2 }}>{label}</label>
+    {children}
+  </div>;
 }

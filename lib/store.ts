@@ -8,12 +8,15 @@ const FRAME = "sellout.frame";
 // Blob URLs stay valid across client-side navigation within the same document,
 // and cost nothing to hold. sessionStorage is the belt for a hard reload.
 let frameUrl: string | null = null;
+let objects: ScannedObject[] | null = null;
 
 export function saveObjects(objs: ScannedObject[]) {
-  try { sessionStorage.setItem(OBJECTS, JSON.stringify(objs)); } catch {}
+  objects = objs;
+  try { sessionStorage.setItem(OBJECTS, JSON.stringify(objs)); } catch { sessionStorage.removeItem(OBJECTS); }
 }
 
 export function loadObjects(): ScannedObject[] | null {
+  if (objects) return objects;
   try {
     const raw = sessionStorage.getItem(OBJECTS);
     return raw ? (JSON.parse(raw) as ScannedObject[]) : null;
@@ -51,4 +54,15 @@ export function loadName(): string | null {
     const n = localStorage.getItem(NAME);
     return n && n.trim() ? n.trim() : null;
   } catch { return null; }
+}
+
+
+let frames: string[] = [];
+export function saveFrames(values: string[]) {
+  frames = values;
+  try { sessionStorage.setItem("sellout.frames", JSON.stringify(values)); } catch { sessionStorage.removeItem("sellout.frames"); }
+}
+export function loadFrames(): string[] {
+  if (frames.length) return frames;
+  try { return JSON.parse(sessionStorage.getItem("sellout.frames") || "[]"); } catch { return []; }
 }

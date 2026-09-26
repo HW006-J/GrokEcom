@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { gbp, type ScannedObject } from "@/lib/mock";
 import { PriceEvidence } from "@/components/price-evidence";
-import { loadFrame, loadObjects, saveObjects } from "@/lib/store";
+import { loadFrame, loadFrames, loadObjects, saveObjects } from "@/lib/store";
 import type { BBox, Comp } from "@/lib/types";
 import { X, Chevron, Check, Flip, Scan } from "@/components/icons";
 
@@ -17,6 +17,7 @@ export default function ReviewScreen() {
   const router = useRouter();
   const [objects, setObjects] = useState<ScannedObject[]>([]);
   const [frame, setFrame] = useState("");
+  const [photos, setPhotos] = useState<string[]>([]);
   const [ready, setReady] = useState(false);
   const [view, setView] = useState<"photo" | "cloud">("photo");
   const [focus, setFocus] = useState<string | null>(null);
@@ -38,7 +39,7 @@ export default function ReviewScreen() {
       if (!alive) return;
       const found = loadObjects() ?? [];
       setView(new URLSearchParams(window.location.search).get("view") === "cloud" ? "cloud" : "photo");
-      setObjects(found); setFrame(loadFrame() ?? ""); setFocus(null); setReady(true);
+      setObjects(found); setPhotos(loadFrames()); setFrame(loadFrame() ?? ""); setFocus(null); setReady(true);
     });
     const pending = requests.current;
     return () => { alive = false; pending.forEach(c => c.abort()); regionRequest.current?.abort(); };
@@ -104,7 +105,7 @@ export default function ReviewScreen() {
       if (!res.ok) throw new Error(data.error ?? "Could not separate this item. Try a tighter box.");
       const id = target === "new" ? crypto.randomUUID() : target!;
       change(old => target === "new" ? [...old, { id, name: "New item", category: "Other", image: data.imageUrl,
-        maskUrl: data.maskUrl, bbox: data.bbox, cutout: true, low: 0, high: 0, condition: "Used — check condition", blurb: "", picked: false,
+        source_image_url: frame, maskUrl: data.maskUrl, bbox: data.bbox, cutout: true, low: 0, high: 0, condition: "Used — check condition", blurb: "", picked: false,
       }] : old.map(o => o.id === id ? { ...o, image: data.imageUrl, generatedImage: undefined, maskUrl: data.maskUrl, bbox: data.bbox, cutout: true } : o));
       setFocus(id); setDrawing(null); setDraftBox(null);
       setNotice(target === "new" ? "Item added. Give it a name, then select it." : "Outline updated. Check the cutout before selecting it.");
@@ -160,6 +161,7 @@ export default function ReviewScreen() {
       <div className="review-scroll">
         {view === "cloud" && <ObjectCloud generating={generating} onGenerate={generateCloud} objects={objects} onSelect={select} onInspect={id => { setFocus(id); setView("photo"); requestAnimationFrame(() => document.getElementById(`item-${id}`)?.scrollIntoView({ block: "center", behavior: "smooth" })); }} />}
         <div hidden={view !== "photo"}>
+        {photos.length > 1 && <nav className="review-photos" aria-label="Source photos">{photos.map((src,i) => <button key={i} aria-pressed={frame === src} disabled={segmenting} onClick={() => {setFrame(src!);setFocus(null);setDrawing(null);setDraftBox(null);}}>Photo {i+1}</button>)}</nav>}
         {frame && <div className="review-photo" data-editing={!!drawing} aria-label={drawing ? "Draw around an item" : "Detected items in your photo"}
           onPointerDown={e => { if (!drawing || segmenting) return; e.currentTarget.setPointerCapture(e.pointerId); origin.current = position(e); setDraftBox(null); }}
           onPointerMove={e => { if (origin.current && drawing) setDraftBox(boxBetween(origin.current, position(e))); }}
@@ -167,8 +169,8 @@ export default function ReviewScreen() {
           onPointerUp={e => { if (!origin.current || !drawing || segmenting) return; const box = boxBetween(origin.current, position(e)); origin.current = null; setDraftBox(box); void finishRegion(box); }}>
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img src={frame} alt="Your room" draggable={false} />
-          {!drawing && current?.maskUrl && <div className="object-mask" style={{ maskImage: `url("${current.maskUrl}")` }} />}
-          {!drawing && objects.map((o, index) => o.bbox && <button className="object-pin" key={o.id} data-focus={focus === o.id}
+          {!drawing && current?.maskUrl && (!current.source_image_url || current.source_image_url === frame) && <div className="object-mask" style={{ maskImage: `url("${current.maskUrl}")` }} />}
+          {!drawing && objects.map((o, index) => (!o.source_image_url || o.source_image_url === frame) && o.bbox && <button className="object-pin" key={o.id} data-focus={focus === o.id}
             aria-label={`Inspect ${o.name}`} onClick={() => { setFocus(o.id); }}
             style={{ left: `${Math.min(.96, Math.max(.04, o.bbox.x + o.bbox.w / 2)) * 100}%`, top: `${Math.min(.94, Math.max(.06, o.bbox.y + o.bbox.h / 2)) * 100}%` }}>{index + 1}</button>)}
           {draftBox && drawing && <span className="draw-box" style={{ left: `${draftBox.x * 100}%`, top: `${draftBox.y * 100}%`, width: `${draftBox.w * 100}%`, height: `${draftBox.h * 100}%` }} />}
@@ -197,7 +199,7 @@ export default function ReviewScreen() {
                 {regenerating === o.id && <span role="status">Regenerating…</span>}
                 <div className="image-edit-tools">
                   <button aria-label="Regenerate image" title="Regenerate image" disabled={segmenting} onClick={() => void regenerate(o)}><Flip size={18}/></button>
-                  <button aria-label="Adjust outline" title="Adjust outline" disabled={segmenting} onClick={() => { setDrawing(o.id); setDraftBox(null); document.querySelector(".review-photo")?.scrollIntoView({block:"start",behavior:"smooth"}); }}><Scan size={18}/></button>
+                  <button aria-label="Adjust outline" title="Adjust outline" disabled={segmenting} onClick={() => { setFrame(o.source_image_url || frame); setDrawing(o.id); setDraftBox(null); document.querySelector(".review-photo")?.scrollIntoView({block:"start",behavior:"smooth"}); }}><Scan size={18}/></button>
                 </div>
               </div>
               <div className="item-name-wrap"><input aria-label="Item name" className="item-name-input" key={`${o.id}-${o.name}`} defaultValue={o.name} onBlur={e => rename(o,e.target.value)} maxLength={80}/>

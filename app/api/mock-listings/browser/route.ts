@@ -1,14 +1,15 @@
 import { fail, ok } from '@/lib/api';
 import { getBrowserJob, startBrowserJob } from '@/lib/browser-lister';
 import { db } from '@/lib/db';
+import { canList } from '@/lib/mock-marketplaces';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-// GET ?id=<jobId> → progress of a browser listing job.
+// GET ?id=<jobId>[&frames=1] → progress of a browser listing job; frames are the replay.
 export async function GET(request: Request) {
-  const id = new URL(request.url).searchParams.get('id') ?? '';
-  const job = getBrowserJob(id);
+  const params = new URL(request.url).searchParams;
+  const job = getBrowserJob(params.get('id') ?? '', params.get('frames') === '1');
   if (!job) return fail('Job not found. It may have expired after a server restart.', 404);
   return ok(job);
 }
@@ -25,7 +26,7 @@ export async function POST(request: Request) {
   try { lot = await db().getLot(lotId); }
   catch { return fail('Could not load this item. Please retry.', 500); }
   if (!lot) return fail('Item not found.', 404);
-  if (lot.status !== 'unsold') return fail('Only unsold items can be listed.', 409);
+  if (!canList(lot)) return fail('Only unsold or unauctioned items can be listed.', 409);
   try {
     const job = await startBrowserJob(lot, platform, new URL(request.url).origin);
     return ok({ jobId: job.id });

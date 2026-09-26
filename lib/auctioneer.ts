@@ -1,7 +1,7 @@
 // The auctioneer: run-of-sale state machine plus the voice.
 // Called by POST /api/sale/[code]/tick, which the auction screen polls, and nudges on every bid,
 // just before the hammer, and the moment the clock runs out.
-import { OPEN_SECONDS, PRESENT_SECONDS, CALL_SECONDS, startsAt } from '@/lib/sale-timing';
+import { OPEN_SECONDS, PRESENT_SECONDS, CALL_SECONDS, startsAt, pausedAt, setPausedAt, setStartsAt } from '@/lib/sale-timing';
 import { db } from '@/lib/db';
 import { structured } from '@/lib/llm';
 import { createCheckoutForLot } from '@/lib/shopify';
@@ -113,8 +113,7 @@ function cannedSay(c: Ctx): string {
 
   switch (c.sale.phase) {
     case 'presenting': {
-      const cond = lot?.condition ? ` Condition: ${lot.condition.toLowerCase()}.` : '';
-      return `Lot ${c.lotNumber}, ${name}. ${lot?.blurb ?? ''}${cond} We start at ${money(c.opening)}.`.replace(/\s+/g, ' ').trim();
+      return `Next up, ${name}. Take a look. Bidding will open at ${money(c.opening)}.`;
     }
     case 'bidding': {
       if (q) {
@@ -201,6 +200,7 @@ async function runTick(code: string): Promise<TickResponse> {
   const sale0 = await findSale(code);
   if (!sale0) throw new Error('sale not found');
   let sale = sale0;
+  if (pausedAt(sale.id) !== null) return SILENT;
   const s = getState(sale);
   const now = Date.now();
 
@@ -221,7 +221,7 @@ async function runTick(code: string): Promise<TickResponse> {
       current_lot_id: lot.id,
       high_bid: null,
       high_bidder: null,
-      lot_ends_at: new Date(now + PRESENT_SECONDS * 1000).toISOString(),
+      lot_ends_at: new Date((sale.phase === 'idle' && at ? Date.parse(at) : now) + PRESENT_SECONDS * 1000).toISOString(),
     };
     const updated = await store.updateSale(sale.id, patch);
     sale = updated ?? { ...sale, ...patch };
@@ -411,7 +411,7 @@ export async function advanceStartClock(code: string): Promise<void> {
   await withSaleLock(code.toUpperCase(), async () => {
     const store = db();
     let sale = await findSale(code);
-    if (!sale) return;
+    if (!sale || pausedAt(sale.id) !== null) return;
     const now = Date.now();
     const start = startsAt(sale.id);
     if (sale.phase === 'idle' && start && Date.parse(start) <= now) {
@@ -428,6 +428,22 @@ export async function advanceStartClock(code: string): Promise<void> {
         phase:'bidding', high_bid:null, high_bidder:null,
         lot_ends_at:new Date(now + OPEN_SECONDS * 1000).toISOString(),
       });
+    }
+  });
+}
+
+export async function pauseSale(code: string, pause: boolean): Promise<void> {
+  await withSaleLock(code.toUpperCase(), async () => {
+    const sale = await findSale(code);
+    if (!sale || sale.phase === 'ended') throw new Error('No active auction');
+    const at = pausedAt(sale.id);
+    if (pause && at === null) setPausedAt(sale.id, Date.now());
+    if (!pause && at !== null) {
+      const elapsed = Date.now() - at;
+      if (sale.lot_ends_at) await db().updateSale(sale.id, {lot_ends_at:new Date(Date.parse(sale.lot_ends_at)+elapsed).toISOString()});
+      const start = startsAt(sale.id);
+      if (sale.phase === 'idle' && start) setStartsAt(sale.id,new Date(Date.parse(start)+elapsed).toISOString());
+      setPausedAt(sale.id,null);
     }
   });
 }

@@ -7,6 +7,9 @@ export function isSold(lot: Lot): boolean {
   return lot.status === 'sold' && Number(lot.sold_for) > 0;
 }
 
+/** Found in the scan, left out of the auction. */
+export const isUnlisted = (lot: Lot) => lot.status === 'found' && !lot.picked;
+
 /** A lot has been offered once it has been on the block, won or not. */
 export function isSettled(lot: Lot): boolean {
   return lot.status === 'sold' || lot.status === 'unsold';
@@ -45,6 +48,8 @@ export type Earnings = {
 export type SaleSummary = {
   sale: Sale;
   lots: Lot[];
+  /** Scanned alongside the sale but never picked for it: candidates for a marketplace listing. */
+  unlisted: Lot[];
   raised: number;
   sold: number;
   offered: number;
@@ -104,10 +109,12 @@ export function computeEarnings(lots: Lot[]): Earnings {
 export function summarise(sales: Sale[], lots: Lot[]): SaleSummary[] {
   return sales
     .map((sale) => {
-      const mine = lots.filter((l) => l.sale_id === sale.id).sort((a, b) => a.sort_order - b.sort_order);
+      const all = lots.filter((l) => l.sale_id === sale.id).sort((a, b) => a.sort_order - b.sort_order);
+      const mine = all.filter((l) => !isUnlisted(l));
       return {
         sale,
         lots: mine,
+        unlisted: all.filter(isUnlisted),
         raised: mine.filter(isSold).reduce((sum, l) => sum + Number(l.sold_for), 0),
         sold: mine.filter(isSold).length,
         offered: mine.filter(isSettled).length,

@@ -7,7 +7,7 @@ export const QUIET_SECONDS = 7;
 /** "Going once, going twice" lands this many seconds before the hammer. */
 export const CALL_SECONDS = 4;
 /** The lot is introduced for this long before bidding opens. */
-export const PRESENT_SECONDS = 5;
+export const PRESENT_SECONDS = 12;
 
 /** Length of the current bidding window, for progress bars: the opening stretch, then quiet windows. */
 export const windowSeconds = (highBid: number | null | undefined) =>
@@ -18,3 +18,10 @@ const shared = globalThis as typeof globalThis & { selloutStarts?: Map<string, s
 const starts = shared.selloutStarts ??= new Map<string, string>();
 export const startsAt = (saleId: string) => starts.get(saleId) ?? null;
 export function setStartsAt(saleId: string, iso: string) { starts.set(saleId, iso); }
+
+const pauseState = globalThis as typeof globalThis & { selloutPauses?: Map<string, number> };
+const pauses = pauseState.selloutPauses ??= new Map<string, number>();
+export const pausedAt = (id: string) => pauses.get(id) ?? null;
+export const setPausedAt = (id: string, value: number | null) => {
+  if (value === null) pauses.delete(id); else pauses.set(id, value);
+};

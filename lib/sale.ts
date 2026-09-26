@@ -18,7 +18,8 @@ export async function findSale(code: string): Promise<Sale | null> {
 }
 
 export async function saleLots(saleId: string): Promise<Lot[]> {
-  return db().lotsForSale(saleId);
+  // Objects the seller did not pick ride along with the sale for the marketplace; the auction never sees them.
+  return (await db().lotsForSale(saleId)).filter((lot) => lot.status !== 'found');
 }
 
 /** Bidding opens at the lot's reserve, or a little under the low estimate. */

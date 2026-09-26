@@ -586,3 +586,45 @@ button:focus-visible, input:focus-visible { outline: 3px solid #007aff; outline-
 .talking-portrait { position:relative; width:100%; height:100%; }
 .talking-portrait .character-portrait { position:absolute; inset:0; }
 .talking-video { opacity:0; pointer-events:none; }
+.capture-filmstrip { display:flex; gap:10px; overflow-x:auto; padding:6px 2px 12px; }
+.capture-filmstrip>div { position:relative; flex:0 0 54px; height:64px; }
+.capture-filmstrip img { width:100%;height:100%;object-fit:cover;border-radius:10px;border:1px solid #ffffff80; }
+.capture-filmstrip button { position:absolute;right:-4px;top:-5px;background:#111;color:white;border-radius:50%;width:24px;height:24px;font-size:18px; }
+.capture-review { display:flex;justify-content:center;align-items:center;gap:12px;background:#111;color:white;border-radius:99px;padding:12px;width:100%;margin-top:12px;font-size:15px;font-weight:600; }
+.review-photos { display:flex;gap:8px;padding:0 0 12px;overflow-x:auto; }
+.review-photos button { padding:8px 14px;border-radius:99px;background:#f2f2f5;font-size:13px;white-space:nowrap; }
+.review-photos button[aria-pressed=true] { background:#111;color:white; }
+.sale-start--orbit .sale-start-content { gap:12px;padding:16px;flex-shrink:0; }
+.lobby-share { display:flex;align-items:center;width:100%;border:1px solid #e3e3e8;background:#ffffff80;border-radius:14px;overflow:hidden; }
+.lobby-share input { min-width:0;flex:1;width:0;border:0;background:transparent;padding:12px;font-size:12px;color:#626268;outline-offset:-3px; }
+.lobby-share button { flex-shrink:0;padding:12px;font-size:12px;font-weight:650;color:#111; }
+.start-options { border:0;margin:0;padding:0;width:100%;min-width:0; }
+.start-options legend { font-size:12px;color:#666;padding:0;margin-bottom:8px; }
+.start-presets { display:flex;gap:5px; }
+.start-presets button { flex:1;padding:10px 4px;border-radius:12px;background:#eaeaf0;font-size:12px;white-space:nowrap; }
+.start-presets button[aria-pressed=true] { color:white;background:#111; }
+.custom-start { display:flex;align-items:center;gap:10px;margin-top:10px;font-size:12px; }
+.custom-start input { width:90px;min-width:0;padding:8px;border:1px solid #ddd;border-radius:10px;background:white;color:#111;font-size:16px; }
+.custom-start span { color:#777;font-size:11px; }
+.lobby-countdown { display:flex;flex-direction:column;align-items:center;justify-content:center;width:100%;padding:8px 0;background:transparent; }
+.lobby-countdown span { font-size:12px;color:#666; }
+.lobby-countdown strong { font-size:clamp(64px,20vw,112px);line-height:1.12;letter-spacing:-.06em;font-weight:800;font-variant-numeric:tabular-nums; }
+@media(max-height:740px) { .sale-start--orbit .waiting-cloud { min-height:100px; }.sale-start--orbit .waiting-cloud-stage { min-height:80px; }.sale-start--orbit .lobby-qr svg { width:104px;height:104px; } }
+/* One bottom tray owns both capture controls and scan progress. */
+.capture-shell .capture-footer { padding:14px;border-radius:28px;background:#25252566;max-height:calc(100svh - 110px);overflow-y:auto; }
+.capture-filmstrip { gap:10px;padding:4px 2px 12px;align-items:center;scrollbar-width:none; }
+.capture-filmstrip>div { flex:0 0 56px;height:64px;border-radius:12px;overflow:hidden;border:1px solid #ffffff70; }
+.capture-filmstrip img { border:0;border-radius:0;display:block; }
+.capture-filmstrip button { top:2px;right:2px;min-height:0;min-width:0;width:26px;height:26px;padding:0;line-height:1;display:grid;place-items:center;border:1px solid #ffffff60;background:#111c;font-size:20px; }
+.capture-filmstrip>div[data-active=true] { outline:2px solid white;outline-offset:2px; }
+.capture-scan-status { display:flex;flex-direction:column;align-items:center;text-align:center;gap:9px;padding:14px 8px 4px;color:white;width:100%; }
+.capture-scan-status strong { font-size:16px; }
+.capture-scan-status>span:not(.scan-spinner) { font-size:12px;color:#ffffffbf; }
+.capture-scan-status button { min-height:40px;padding:8px 18px;background:#ffffff20;border-radius:99px;color:white;font-size:13px;margin-top:4px; }
+.capture-footer .capture-actions { grid-template-columns:1fr 68px 1fr;gap:12px; }
+.capture-footer .shutter { width:68px;height:68px;min-height:68px; }
+.capture-review { margin-top:12px;min-height:44px; }
+/* Keep the auctioneer's full hairline in frame, including while speaking. */
+.talking-portrait .character-portrait { inset: 0 5%; width: 90%; height: 100%; object-position: center top; transform-origin: center top; }
+.character-stage .character-portrait,
+.character-stage[data-speaking="true"] .character-portrait { animation: none; }

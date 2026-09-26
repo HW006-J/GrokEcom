@@ -35,6 +35,7 @@ export default function AuctionScreen() {
   const [line, setLine] = useState("");
   const [code, setCode] = useState<string | null>(null);
   const [state, setState] = useState<SaleStateResponse | null>(null);
+  useEffect(() => { setPaused(state?.sale.paused_at != null); }, [state?.sale.paused_at]);
   const [now, setNow] = useState(() => Date.now());
 
   useEffect(() => {
@@ -62,7 +63,8 @@ export default function AuctionScreen() {
       const existing = sessionStorage.getItem(SALE_KEY);
       if (existing && (await load(existing))) return;
 
-      const picked = (loadObjects() ?? []).filter((o) => o.picked);
+      const scanned = loadObjects() ?? [];
+      const picked = scanned.filter((o) => o.picked);
       if (!picked.length) { if (!cancelled) setStatus("empty"); return; }
 
       const res = await fetch("/api/sale", {
@@ -79,6 +81,17 @@ export default function AuctionScreen() {
             low: o.low,
             high: o.high,
             reserve: o.reserve ?? Math.round(o.low * 0.55),
+            comps: o.comps ?? [],
+          })),
+          // Everything scanned but not picked, so the dashboard can offer it to a marketplace instead.
+          unpicked: scanned.filter((o) => !o.picked && o.name?.trim()).map((o) => ({
+            name: o.name,
+            category: o.category,
+            condition: o.condition,
+            blurb: o.blurb,
+            image_url: o.generatedImage || o.image,
+            low: o.low || undefined,
+            high: o.high || undefined,
             comps: o.comps ?? [],
           })),
         }),
@@ -140,7 +153,7 @@ export default function AuctionScreen() {
   }, [status, code]);
 
   /* ── The voice ───────────────────────────────────────────── */
-  const { speak, connect, avatar, speaking, analyser } = useAuctioneerVoice(mock, state?.sale.phase === "ended");
+  const { speak, connect, avatar, speaking, analyser } = useAuctioneerVoice(mock, state?.sale.phase === "ended", paused);
 
   /* ── Ticking, one at a time ──────────────────────────────── */
   const ticking = useRef(false);
@@ -194,13 +207,14 @@ export default function AuctionScreen() {
 
   /* ── Derived, entirely from the server ───────────────────── */
   const sale = state?.sale ?? null;
+  const clockNow = sale?.paused_at ?? now;
   const lot = state?.lot ?? null;
   const lots = state?.lots ?? [];
 
   const high = sale?.high_bid === null || sale?.high_bid === undefined ? null : Number(sale.high_bid);
   const opening = lot ? Math.round(Number(lot.reserve ?? 0) || Number(lot.low ?? 0) * 0.55) : 0;
   const left = sale?.lot_ends_at
-    ? Math.max(0, Math.round((new Date(sale.lot_ends_at).getTime() - now) / 1000))
+    ? Math.max(0, Math.round((new Date(sale.lot_ends_at).getTime() - clockNow) / 1000))
     : 0;
   const settled = sale?.phase === "sold";
   const ended = sale?.phase === "ended";
@@ -354,9 +368,14 @@ export default function AuctionScreen() {
           </button>
           <button
             className="icon-btn icon-btn--light"
-            style={{ width: 52, height: 52, minHeight: 52 }}
-            aria-label={paused ? "Resume" : "Pause"}
-            onClick={() => setPaused((p) => !p)}
+            style={{ width: 52, height: 52, minHeight: 52, position:"relative", zIndex:8 }}
+            aria-label={paused ? "Resume auction" : "Pause auction"}
+            onClick={async () => {
+              const next=!paused;
+              const res=await fetch(`/api/sale/${code}/pause`,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({paused:next})});
+              if(res.ok) {setPaused(next); const updated=await fetch(`/api/sale/${code}`).then(r=>r.json());setState(updated);}
+              else setEndError("Could not pause or resume. Try again.");
+            }}
           >
             {paused ? <Play size={19} /> : <Pause size={19} />}
           </button>
@@ -366,7 +385,7 @@ export default function AuctionScreen() {
       {/* The tap that lets the avatar speak, and starts the room */}
       {(!started || (sale?.phase === "idle" && untilStart !== null)) && <StartGate onStart={begin} lots={lots.length} code={code} url={shareUrl} items={lots} note={previewNote} startIn={startIn} onStartIn={setStartIn} untilStart={started ? untilStart : null} starting={starting} error={endError} />}
 
-      {started && sale?.phase === "presenting" && <div className="bidding-countdown" role="status"><span>Bidding starts in</span><strong key={Math.ceil((Date.parse(sale.lot_ends_at ?? "") - now) / 1000)}>{Math.max(0, Math.ceil((Date.parse(sale.lot_ends_at ?? "") - now) / 1000)) || "Go"}</strong></div>}
+      {started && sale?.phase === "presenting" && <div className="bidding-countdown" role="status"><span>{paused ? "Auction paused" : "Bidding starts in"}</span><strong key={Math.ceil((Date.parse(sale.lot_ends_at ?? "") - clockNow) / 1000)}>{Math.max(0, Math.ceil((Date.parse(sale.lot_ends_at ?? "") - clockNow) / 1000)) || "Go"}</strong></div>}
       {started && !ended && <button className="end-auction-control" onClick={() => setEndPrompt(true)}>End auction</button>}
       {endPrompt && !ended && <div className="end-auction-overlay" role="dialog" aria-modal="true" aria-labelledby="end-auction-title"><div>
         <h2 id="end-auction-title">End the auction?</h2><p>The current highest bid wins. Remaining items won’t be sold.</p>
@@ -385,7 +404,7 @@ export default function AuctionScreen() {
       {started && settled && lot && <WinnerFlash lot={lot} />}
 
       {/* Everything, at the end */}
-      {started && ended && <SaleSummary lots={lots} raised={raised} onDone={() => router.push("/dashboard")} />}
+      {started && ended && <SaleSummary lots={lots} raised={raised} />}
 
       {sheet && <ShareSheet url={shareUrl} code={code} name={lot?.name ?? "this lot"} onClose={() => setSheet(false)} />}
     </main>
@@ -400,10 +419,12 @@ export default function AuctionScreen() {
 
 type AvatarState = "idle" | "connecting" | "live" | "reconnecting" | "failed" | "mock";
 
-function useAuctioneerVoice(mock: boolean, ended: boolean) {
+function useAuctioneerVoice(mock: boolean, ended: boolean, paused: boolean) {
   const [avatar,setAvatar] = useState<AvatarState>("idle");
   const [speaking,setSpeaking] = useState(false);
   const context = useRef<AudioContext | null>(null);
+  const voicePaused = useRef(paused);
+  useEffect(() => { voicePaused.current=paused; if(context.current) void (paused ? context.current.suspend() : context.current.resume()); },[paused]);
   const analyser = useRef<AnalyserNode | null>(null);
   const source = useRef<AudioBufferSourceNode | null>(null);
   const request = useRef<AbortController | null>(null);
@@ -431,9 +452,9 @@ function useAuctioneerVoice(mock: boolean, ended: boolean) {
         if(!res.ok) throw new Error("Voice unavailable");
         const buffer=await context.current.decodeAudioData(await res.arrayBuffer());
         if(stopped.current || turn!==generation.current) return;
-        await context.current.resume();
+        if (!voicePaused.current) await context.current.resume();
         if(stopped.current || turn!==generation.current) return;
-        const audio=context.current.createBufferSource();audio.buffer=buffer;
+        const audio=context.current.createBufferSource();audio.buffer=buffer;audio.playbackRate.value=.9;
         analyser.current?.disconnect();
         const meter=context.current.createAnalyser();meter.fftSize=512;
         analyser.current=meter;audio.connect(meter);meter.connect(context.current.destination);
@@ -448,7 +469,7 @@ function useAuctioneerVoice(mock: boolean, ended: boolean) {
     stopped.current=ended;
   },[ended]);
   useEffect(()=>()=>{stopped.current=true;generation.current++;request.current?.abort();source.current?.stop();void context.current?.close();},[]);
-  return {speak,connect:retry,avatar,analyser,speaking: speaking && !ended};
+  return {speak,connect:retry,avatar,analyser,speaking: speaking && !ended && !paused};
 }
 
 function Auctioneer({ state, speaking, analyser }: { state: AvatarState; speaking:boolean; mock:boolean; analyser: React.RefObject<AnalyserNode | null> }) {
@@ -460,6 +481,15 @@ function Auctioneer({ state, speaking, analyser }: { state: AvatarState; speakin
 }
 
 function StartGate({ onStart, lots, code, url, items, note, startIn, onStartIn, untilStart, starting, error }: { startIn: number; onStartIn: (n:number)=>void; untilStart: number | null; starting:boolean; error:string; items: Lot[]; note: string; onStart: () => void; lots: number; code: string | null; url: string }) {
+  const [custom, setCustom] = useState(false);
+  const [customValue, setCustomValue] = useState("90");
+  const [copied, setCopied] = useState(false);
+  const linkInput = useRef<HTMLInputElement>(null);
+  const validCustom = !custom || (/^\d+$/.test(customValue) && Number(customValue) >= 1 && Number(customValue) <= 3600);
+  const copyLink = async () => {
+    try { await navigator.clipboard.writeText(url); setCopied(true); }
+    catch { linkInput.current?.focus(); linkInput.current?.select(); }
+  };
   return (
     <div className="sale-start sale-start--orbit">
       <header className="waiting-host-header"><h2>In your orbit.</h2><p>{code ? `Room ${code}` : "Getting ready"} · {lots} {lots === 1 ? "item" : "items"}</p></header>
@@ -469,15 +499,24 @@ function StartGate({ onStart, lots, code, url, items, note, startIn, onStartIn, 
 
         <p className="waiting-preview-note" role="status">{note}</p>
         {url && <div className="lobby-qr"><QRCodeSVG value={url} size={200} marginSize={2}/></div>}
-        <a className="lobby-link" href={url} target="_blank" rel="noreferrer">Scan to join ↗</a>
-        {untilStart !== null ? <div className="bidding-countdown" role="timer" aria-live="polite" style={{ position: "static", transform: "none" }}>
+        <div className="lobby-share">
+          <input ref={linkInput} aria-label="Auction join link" readOnly value={url} onFocus={e => e.target.select()}/>
+          <button onClick={() => void copyLink()} disabled={!url} aria-label="Copy auction link">{copied ? "Copied ✓" : "Copy link"}</button>
+        </div>
+        {untilStart !== null ? <div className="lobby-countdown" role="timer">
           <span>Auction starts in</span><strong>{untilStart ? `${Math.floor(untilStart / 60)}:${String(untilStart % 60).padStart(2, "0")}` : "Go"}</strong>
         </div> : <>
-          <label className="duration-picker">Start the auction<select value={startIn} onChange={e=>onStartIn(Number(e.target.value))} disabled={starting}>
-            <option value={0}>Now</option><option value={30}>In 30 seconds</option><option value={60}>In 1 minute</option><option value={120}>In 2 minutes</option><option value={300}>In 5 minutes</option>
-          </select></label>
+          <fieldset className="start-options" disabled={starting}>
+            <legend>Start in</legend>
+            <div className="start-presets">
+              {[{value:0,label:"Now"},{value:30,label:"30 sec"},{value:60,label:"1 min"},{value:300,label:"5 min"}].map(option =>
+                <button type="button" key={option.value} aria-pressed={!custom && startIn === option.value} onClick={() => {setCustom(false);onStartIn(option.value);}}>{option.label}</button>)}
+              <button type="button" aria-pressed={custom} onClick={() => {setCustom(true);onStartIn(Number(customValue));}}>Custom</button>
+            </div>
+            {custom && <label className="custom-start">Seconds<input aria-label="Custom start delay in seconds" type="number" inputMode="numeric" min="1" max="3600" value={customValue} onChange={e => {setCustomValue(e.target.value);onStartIn(Number(e.target.value));}}/><span>1–3,600</span></label>}
+          </fieldset>
           {error && <p role="alert">{error}</p>}
-          <button className="pill pill--primary" disabled={starting} onClick={onStart}>
+          <button className="pill pill--primary" disabled={starting || !validCustom} onClick={onStart}>
             {startIn ? "Start countdown" : "Start auction"} <Chevron size={17} />
           </button>
         </>}
@@ -512,7 +551,7 @@ function WinnerFlash({ lot }: { lot: Lot }) {
 }
 
 /* ── The close ──────────────────────────────────────────────── */
-function SaleSummary({ lots, raised, onDone }: { lots: Lot[]; raised: number; onDone: () => void }) {
+function SaleSummary({ lots, raised }: { lots: Lot[]; raised: number }) {
   return (
     <div className="fade-in" style={{ position: "absolute", inset: 0, zIndex: 26, background: "#fff", display: "flex", flexDirection: "column" }}>
       <header className="pad safe-t">
@@ -546,9 +585,9 @@ function SaleSummary({ lots, raised, onDone }: { lots: Lot[]; raised: number; on
       </div>
 
       <footer className="pad safe-b" style={{ paddingTop: 10 }}>
-        <button className="pill pill--primary" style={{ width: "100%" }} onClick={onDone}>
+        <a href="/dashboard" className="pill pill--primary" style={{ width: "100%", textDecoration: "none" }}>
           See your earnings <Chevron size={17} />
-        </button>
+        </a>
       </footer>
     </div>
   );

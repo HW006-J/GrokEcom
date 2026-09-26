@@ -39,6 +39,7 @@ export type Comp = { title: string; price: number; url: string; source: string }
 
 /** A live sale: an ordered queue of lots with one on the block at a time. */
 export type Sale = {
+  paused_at?: number | null;
   bidding_seconds?: number;
   starts_at?: string | null;    // ISO, when the host scheduled bidding to begin; null until scheduled
   id: string;

@@ -49,13 +49,14 @@ export default function DashboardScreen() {
       </header>
 
       <div style={{ flex: 1, minHeight: 0, overflowY: "auto", padding: "18px 22px 8px" }}>
+        {state === "error" && <div role="alert" style={{padding:"16px 0"}}><p>Could not load your earnings.</p><button className="pill pill--primary" onClick={() => window.location.reload()}>Try again</button></div>}
         {nothingYet ? (
           <EmptyState onScan={() => router.push("/")} />
         ) : (
           <>
             {earnings && <Hero earnings={earnings} />}
             {earnings && <Stats earnings={earnings} />}
-            {state === "ready" && <UnsoldDashboard lots={sales.flatMap((sale) => sale.lots)} />}
+            {state === "ready" && <UnsoldDashboard lots={sales.flatMap((sale) => [...sale.lots, ...(sale.unlisted ?? [])])} />}
             {sales.map((s) => (
               <SaleCard
                 key={s.sale.id}

@@ -1,7 +1,7 @@
 import { ok, fail } from '@/lib/api';
 import { db } from '@/lib/db';
 import { findSale, openingBid } from '@/lib/sale';
-import { QUIET_SECONDS } from '@/lib/sale-timing';
+import { QUIET_SECONDS, pausedAt } from '@/lib/sale-timing';
 import type { BidResponse } from '@/lib/types';
 
 type Body = { bidder?: string; amount?: number };
@@ -24,6 +24,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ cod
 
   const sale = await findSale(code);
   if (!sale) return fail('sale not found', 404);
+  if (pausedAt(sale.id) !== null) return fail('Auction paused. Please wait for the host.',409);
   if (sale.phase !== 'bidding' || !sale.current_lot_id) return fail('bidding is not open', 409);
   if (sale.lot_ends_at && new Date(sale.lot_ends_at).getTime() <= Date.now()) {
     return fail('the hammer has fallen on this lot', 409);

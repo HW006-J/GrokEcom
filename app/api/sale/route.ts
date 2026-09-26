@@ -1,6 +1,7 @@
 import { ok, fail } from '@/lib/api';
 import { db, type NewLot as NewLotRow } from '@/lib/db';
 import { makeCode } from '@/lib/sale';
+import { priceObject } from '@/lib/pricing';
 import type { Comp, CreateSaleResponse, Lot, Sale } from '@/lib/types';
 
 /**
@@ -22,7 +23,10 @@ type NewLot = {
   comps?: Comp[];
 };
 
-type Body = { lotIds?: string[]; lots?: NewLot[]; title?: string };
+type Body = { lotIds?: string[]; lots?: NewLot[]; unpicked?: NewLot[]; title?: string };
+
+/** Unpicked objects are only there to be listed afterwards; keep the number sane. */
+const MAX_UNPICKED = 12;
 
 /** A lot name is read aloud and printed on a card; keep it sane. */
 const NAME_MAX = 80;
@@ -126,6 +130,40 @@ export async function POST(request: Request) {
   }
 
   if (attached.length === 0) return fail('none of those lots exist', 404);
+
+  // What the seller scanned but did not auction goes along too, so the dashboard can list it on a marketplace.
+  const leftovers = (Array.isArray(body?.unpicked) ? body.unpicked : [])
+    .map((s) => ({ ...s, name: cleanName(s?.name) }))
+    .filter((s): s is NewLot & { name: string } => s.name !== null)
+    .slice(0, MAX_UNPICKED);
+  if (leftovers.length) {
+    try {
+      const rows = await store.insertLots(leftovers.map((s, i) => ({
+        sale_id: sale.id,
+        name: s.name,
+        category: s.category ?? 'Other',
+        condition: s.condition,
+        blurb: s.blurb,
+        image_url: s.image_url,
+        low: s.low ?? 0,
+        high: s.high ?? 0,
+        reserve: s.reserve ?? (s.low ? Math.round(s.low * 0.55) : 0),
+        comps: cleanComps(s.comps),
+        picked: false,
+        status: 'found' as const,
+        sort_order: attached.length + i + 1,
+      })));
+      // Most were never priced (only picks are). Price them now, off the request path.
+      for (const row of rows) {
+        if (Number(row.low) > 0) continue;
+        void priceObject({ name: row.name, category: row.category, condition: row.condition })
+          .then((est) => store.updateLot(row.id, { low: est.low, high: est.high, reserve: est.reserve, comps: est.comps }))
+          .catch(() => {});
+      }
+    } catch (e) {
+      console.warn('[sellout] could not keep unpicked objects:', e instanceof Error ? e.message : e);
+    }
+  }
 
   const base = process.env.NEXT_PUBLIC_APP_URL ?? new URL(request.url).origin;
   return ok<CreateSaleResponse>({ sale, shareUrl: `${base}/join/${sale.code}` });
