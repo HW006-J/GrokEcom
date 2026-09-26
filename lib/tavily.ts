@@ -1,6 +1,9 @@
 export type Comp = { title: string; url: string; content: string };
 
-export async function searchComps(query: string): Promise<Comp[]> {
+export const CLOTHING_MARKETS = ['vinted.co.uk', 'depop.com', 'ebay.co.uk'];
+export const HOUSEHOLD_MARKETS = ['ebay.co.uk', 'gumtree.com', 'facebook.com', 'vinted.co.uk'];
+
+export async function searchComps(query: string, domains: string[] = CLOTHING_MARKETS): Promise<Comp[]> {
   const apiKey = process.env.TAVILY_API_KEY;
   if (!apiKey) {
     console.warn('TAVILY_API_KEY not set, skipping comps');
@@ -14,7 +17,7 @@ export async function searchComps(query: string): Promise<Comp[]> {
       query,
       search_depth: 'basic',
       max_results: 5,
-      include_domains: ['vinted.co.uk', 'depop.com', 'ebay.co.uk'],
+      include_domains: domains,
     }),
   });
   if (!res.ok) {
