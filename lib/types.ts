@@ -13,6 +13,10 @@ export type Lot = {
   blurb: string;                // one or two sentences the auctioneer can riff on
   image_url: string;            // cutout on transparent/white, used in the cloud and the sale
   source_image_url: string | null; // the original room frame
+  mask_url?: string;           // exact foreground mask in source image coordinates
+  cutout?: boolean;
+  preview_generated?: boolean;
+  confidence?: number;
   bbox: BBox | null;            // where it sat in the frame, 0..1 relative
   low: number;                  // GBP estimate range from comps
   high: number;
@@ -35,6 +39,8 @@ export type Comp = { title: string; price: number; url: string; source: string }
 
 /** A live sale: an ordered queue of lots with one on the block at a time. */
 export type Sale = {
+  bidding_seconds?: number;
+  starts_at?: string | null;    // ISO, when the host scheduled bidding to begin; null until scheduled
   id: string;
   code: string;                 // short join code used in the share link
   title: string;

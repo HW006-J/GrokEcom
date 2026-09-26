@@ -27,6 +27,8 @@ export async function structured<T>(opts: {
   schema: Record<string, unknown>;
   name: string;
   maxTokens?: number;
+  /** No retries: a caller holding a lock would rather fall back than wait. */
+  timeoutMs?: number;
 }): Promise<T> {
   const run = async (model: string) => {
     // gpt-5 family spends completion tokens on reasoning first; at minimal effort a 60-token
@@ -48,7 +50,7 @@ export async function structured<T>(opts: {
           schema: { type: 'object', additionalProperties: false, ...opts.schema },
         },
       },
-    });
+    }, { timeout: opts.timeoutMs ?? 15_000, maxRetries: 0 });
     const text = res.choices[0]?.message?.content;
     if (!text) throw new Error('OpenAI returned no content');
     return JSON.parse(text) as T;
@@ -96,7 +98,7 @@ export async function searchStructured<T>(opts: {
           },
         },
       },
-      { timeout: opts.timeoutMs ?? 30_000 }
+      { timeout: opts.timeoutMs ?? 30_000, maxRetries: 0 }
     );
     const text = res.output_text;
     if (!text) throw new Error('OpenAI web search returned no content');

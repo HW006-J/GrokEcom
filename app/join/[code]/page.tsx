@@ -4,9 +4,14 @@ import { use, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { loadName, saveName } from "@/lib/store";
 import { supabaseBrowser } from "@/lib/supabase";
 import { gbp, type Lot, type Sale, type SaleBid, type SaleMessage, type SaleStateResponse } from "@/lib/types";
+import { EnableWinSound, WinSound } from "@/components/win-sound";
+import { SaleConfetti } from "@/components/sale-confetti";
+import { SaleReceipt } from "@/components/sale-receipt";
+import { WaitingOrbit } from "@/components/waiting-orbit";
+import { PriceEvidence } from "@/components/price-evidence";
+import { windowSeconds } from "@/lib/sale-timing";
 import { Users, Clock, Check, Chevron } from "@/components/icons";
 
-const ROUND = 30;
 // Polling is the primary path: the sale runs with or without a database, so we
 // never assume Realtime is there. A second is fast enough to feel live.
 const POLL_MS = 1200;
@@ -229,19 +234,32 @@ export default function JoinPage({ params }: { params: Promise<{ code: string }>
     );
   }
 
+  if (sale?.phase === "idle" || sale?.phase === "presenting") {
+    const countdown = sale.phase === "presenting";
+    const seconds = Math.max(0, Math.ceil((Date.parse(sale.lot_ends_at ?? "") - now) / 1000));
+    const untilStart = sale.starts_at ? Math.max(0, Math.ceil((Date.parse(sale.starts_at) - now) / 1000)) : null;
+    return <main className="shell bidder-lobby"><EnableWinSound/>
+      <header className="review-header safe-t"><div><h1>{countdown ? "Get ready." : "You’re in."}</h1><p>Room {room} · {name}</p></div></header>
+      {!countdown && <WaitingOrbit lots={lots}/>}
+      <div className="lobby-center" role="status">
+        {countdown ? <><span>Bidding starts in</span><strong key={seconds} className="lobby-number">{seconds || "…"}</strong><p>{lot?.name}</p></> : untilStart !== null ? <><span>Auction starts in</span><strong key={untilStart} className="lobby-number">{untilStart ? `${Math.floor(untilStart / 60)}:${String(untilStart % 60).padStart(2, "0")}` : "…"}</strong></> : <><span className="lobby-pulse"/><h2>Starting soon.</h2></>}
+      </div>
+      <p className="lobby-note">{countdown ? "" : "Waiting for the host"}</p>
+    </main>;
+  }
+
   /* ── The room ────────────────────────────────────────────── */
-  const pct = settled ? 100 : ((ROUND - left) / ROUND) * 100;
+  const span = windowSeconds(high);
+  const pct = settled ? 100 : Math.min(100, ((span - left) / span) * 100);
   const mmss = `${String(Math.floor(left / 60)).padStart(2, "0")}:${String(left % 60).padStart(2, "0")}`;
   const status =
     !sale ? "Joining…"
-    : sale.phase === "idle" ? "About to start"
-    : sale.phase === "presenting" ? "Up next"
     : sale.phase === "bidding" ? "On the block"
     : sale.phase === "sold" ? "Hammer down"
     : "That's the sale";
 
   return (
-    <main className="shell">
+    <main className="shell"><EnableWinSound/>
       <header className="pad safe-t" style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
         <span className="meta">Room {room} · {status}</span>
         <span style={{ display: "inline-flex", alignItems: "center", gap: 5, color: "var(--ink-2)", fontSize: 13 }}>
@@ -262,6 +280,7 @@ export default function JoinPage({ params }: { params: Promise<{ code: string }>
       <section className="pad safe-b" style={{ paddingTop: 4 }}>
         <h1 className="title">{lot?.name ?? "Waiting for the first lot"}</h1>
         {lot?.condition && <p className="sub" style={{ marginTop: 3 }}>{lot.condition}</p>}
+        {lot && <PriceEvidence comps={lot.comps} compact />}
 
         <div style={{ display: "flex", alignItems: "flex-end", justifyContent: "space-between", marginTop: 12 }}>
           <div>
@@ -380,6 +399,7 @@ function WinnerFlash({ lot, me }: { lot: Lot; me: string | null }) {
 
   return (
     <div className="fade-in" style={{ position: "absolute", inset: 0, zIndex: 28, background: "rgba(255,255,255,.96)", display: "grid", placeItems: "center", padding: 28 }}>
+      {sold && <><WinSound id={lot.id}/><SaleConfetti id={lot.id}/></>}
       <div style={{ textAlign: "center", width: "100%" }}>
         {lot.image_url && (
           /* eslint-disable-next-line @next/next/no-img-element */
@@ -390,7 +410,7 @@ function WinnerFlash({ lot, me }: { lot: Lot; me: string | null }) {
           {sold ? gbp(Number(lot.sold_for ?? 0)) : "—"}
         </p>
         <p className="title" style={{ marginTop: 10, color: mine ? "var(--accent)" : undefined }}>
-          {sold ? (mine ? "Yours" : `to ${lot.sold_to}`) : "No bids"}
+          {sold ? `${lot.sold_to} has won the item` : "No bids"}
         </p>
         <p className="sub" style={{ marginTop: 6 }}>{lot.name}</p>
       </div>
@@ -418,6 +438,7 @@ function SaleSummary({ lots, raised, me }: { lots: Lot[]; raised: number; me: st
       <div style={{ flex: 1, overflowY: "auto", padding: "14px 22px 4px" }}>
         {lots.map((l) => {
           const isMine = Boolean(l.status === "sold" && me && l.sold_to === me);
+          if (l.status === "sold") return <SaleReceipt key={l.id} lot={l} mine={isMine}/>;
           return (
             <div key={l.id} style={{ display: "flex", alignItems: "center", gap: 14, padding: "12px 0", borderBottom: "1px solid var(--line)" }}>
               <span style={{ width: 52, height: 52, borderRadius: 12, background: "#f6f6f4", overflow: "hidden", flex: "0 0 auto" }}>
@@ -429,11 +450,11 @@ function SaleSummary({ lots, raised, me }: { lots: Lot[]; raised: number; me: st
               <span style={{ flex: 1, minWidth: 0 }}>
                 <span style={{ display: "block", fontSize: 15, fontWeight: 500, letterSpacing: "-.2px" }}>{l.name}</span>
                 <span className="meta" style={{ textTransform: "none", color: isMine ? "var(--accent)" : undefined }}>
-                  {l.status === "sold" ? (isMine ? "you won it" : `to ${l.sold_to}`) : "no bids"}
+                  No bids
                 </span>
               </span>
-              <span style={{ fontSize: 15, fontVariantNumeric: "tabular-nums", color: l.status === "sold" ? "var(--ink)" : "var(--ink-3)" }}>
-                {l.status === "sold" ? gbp(Number(l.sold_for ?? 0)) : "—"}
+              <span style={{ fontSize: 15, fontVariantNumeric: "tabular-nums", color: "var(--ink-3)" }}>
+                —
               </span>
             </div>
           );

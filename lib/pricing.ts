@@ -46,6 +46,15 @@ const SCHEMA = {
   required: ['low', 'high', 'comps'],
 };
 
+/** A comp is shown to bidders as evidence, so drop anything that is not a plausible public listing URL. */
+const realListing = (url: unknown) => {
+  if (typeof url !== 'string') return false;
+  try {
+    const u = new URL(url);
+    return u.protocol === 'https:' && !/(^|\.)(sandbox|playground|example)\./.test(u.hostname) && u.pathname.length > 1;
+  } catch { return false; }
+};
+
 type Priced = { low: number; high: number; comps: Comp[] };
 
 function normalise(low: number, high: number, fallback: [number, number]) {
@@ -119,7 +128,7 @@ export async function priceObject(item: PriceInput): Promise<Estimate> {
       const out = await attempt();
       const { low, high } = normalise(out.low, out.high, floor);
       const comps = (out.comps ?? [])
-        .filter((c) => c && Number(c.price) > 0 && typeof c.url === 'string')
+        .filter((c) => c && Number(c.price) > 0 && realListing(c.url))
         .slice(0, 4)
         .map((c) => ({ title: String(c.title), price: Math.round(Number(c.price)), url: c.url, source: String(c.source) }));
       return { low, high, reserve: reserveFor(low), comps };

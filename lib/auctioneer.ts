@@ -1,13 +1,14 @@
 // The auctioneer: run-of-sale state machine plus the voice.
-// Called by POST /api/sale/[code]/tick, which the auction screen polls every ~8s.
+// Called by POST /api/sale/[code]/tick, which the auction screen polls, and nudges on every bid,
+// just before the hammer, and the moment the clock runs out.
+import { OPEN_SECONDS, PRESENT_SECONDS, CALL_SECONDS, startsAt } from '@/lib/sale-timing';
 import { db } from '@/lib/db';
 import { structured } from '@/lib/llm';
 import { createCheckoutForLot } from '@/lib/shopify';
 import { findSale, openingBid, saleLots } from '@/lib/sale';
 import type { CloseLotResponse, Lot, Sale, SaleBid, SaleMessage, TickResponse } from '@/lib/types';
 
-const BIDDING_SECONDS = 30;
-const PRESENT_TICKS = 1; // one tick to introduce the lot before bidding opens
+
 const SOLD_TICKS = 1;    // one tick to land the result before the next lot
 
 type TickState = { lastTickAt: string; ticksInPhase: number; phase: Sale['phase'] };
@@ -82,6 +83,8 @@ async function settleLot(code: string): Promise<CloseLotResponse> {
     await store.updateLot(lot.id, { status: 'unsold' });
   }
 
+  // Always 'sold', even for the last lot: the room hears the hammer and sees the winner,
+  // and the next tick ends the sale when nothing is queued.
   await store.updateSale(sale.id, { phase: 'sold', lot_ends_at: null });
   return { winner: winner ?? null, amount, checkoutUrl };
 }
@@ -121,10 +124,10 @@ function cannedSay(c: Ctx): string {
       if (latest) {
         return `${money(Number(latest.amount))} from ${latest.bidder}! Do I hear ${money(Number(latest.amount) + 5)}?`;
       }
-      if (c.secondsLeft !== null && c.secondsLeft <= 10) {
+      if (c.secondsLeft !== null && c.secondsLeft <= CALL_SECONDS + 1) {
         return high && leader
-          ? `Going once at ${money(high)} with ${leader}. Last chance on the ${short}.`
-          : `Ten seconds on the ${short} and not a single bid. Someone take it home.`;
+          ? `Going once, going twice at ${money(high)} with ${leader}...`
+          : `Last call on the ${short} at ${money(c.opening)}. Anyone?`;
       }
       return high && leader
         ? `${money(high)} with ${leader}. Who is going higher on the ${short}?`
@@ -149,7 +152,8 @@ async function llmSay(c: Ctx): Promise<{ say: string; answeredMessageIds: string
   const system = [
     'You are the auctioneer at The Sellout, a live auction of things people found in their own homes.',
     'You are a real auction caller: quick, warm, and specific about the object in front of you.',
-    'Name every bidder the moment their bid lands. In the last ten seconds, count it down with "going once" and "going twice".',
+    'Name every bidder the moment their bid lands. The lot ends when the room goes quiet: every bid resets a short clock.',
+    `When seconds left is ${CALL_SECONDS + 1} or fewer and there are no new bids, say "Going once, going twice" with the amount and leader, nothing else.`,
     'When the hammer falls, say "Sold to <name> for <amount>".',
     'At most two short sentences. Everything you write is spoken aloud, so never write stage directions or emoji.',
     'Answer viewer questions using only the lot blurb and condition you are given. If the answer is not there, say you will check with the seller.',
@@ -179,6 +183,7 @@ async function llmSay(c: Ctx): Promise<{ say: string; answeredMessageIds: string
     content,
     name: 'auctioneer_line',
     maxTokens: 300,
+    timeoutMs: 6000, // runs inside the sale lock; the canned line is the fallback
     schema: {
       properties: {
         say: { type: 'string', description: 'What the auctioneer says next, at most two sentences' },
@@ -199,6 +204,10 @@ async function runTick(code: string): Promise<TickResponse> {
   const s = getState(sale);
   const now = Date.now();
 
+  // Waiting for the scheduled start: the screens show the countdown, the auctioneer stays quiet.
+  const at = startsAt(sale.id);
+  if (sale.phase === 'idle' && (!at || now < Date.parse(at))) return SILENT;
+
   const lots = await saleLots(sale.id);
   const nextQueued = () => lots.find((l) => l.status === 'queued') ?? null;
 
@@ -212,7 +221,7 @@ async function runTick(code: string): Promise<TickResponse> {
       current_lot_id: lot.id,
       high_bid: null,
       high_bidder: null,
-      lot_ends_at: null,
+      lot_ends_at: new Date(now + PRESENT_SECONDS * 1000).toISOString(),
     };
     const updated = await store.updateSale(sale.id, patch);
     sale = updated ?? { ...sale, ...patch };
@@ -239,8 +248,8 @@ async function runTick(code: string): Promise<TickResponse> {
       break;
     }
     case 'presenting': {
-      if (s.ticksInPhase >= PRESENT_TICKS) {
-        const ends = new Date(now + BIDDING_SECONDS * 1000).toISOString();
+      if (!sale.lot_ends_at || now >= Date.parse(sale.lot_ends_at)) {
+        const ends = new Date(now + OPEN_SECONDS * 1000).toISOString();
         const patch: Partial<Sale> = {
           phase: 'bidding',
           lot_ends_at: ends,
@@ -250,14 +259,14 @@ async function runTick(code: string): Promise<TickResponse> {
         const updated = await store.updateSale(sale.id, patch);
         sale = updated ?? { ...sale, ...patch };
         action = 'open_bidding';
-        event = `bidding is open, ${BIDDING_SECONDS} seconds on the clock`;
+        event = `bidding is open, ${OPEN_SECONDS} seconds on the clock and every bid keeps it alive`;
       }
       break;
     }
     case 'bidding': {
       if (sale.lot_ends_at && new Date(sale.lot_ends_at).getTime() <= now) {
         const result = await settleLot(code);
-        sale = { ...sale, phase: 'sold', lot_ends_at: null };
+        sale = (await findSale(code)) ?? { ...sale, phase: 'sold', lot_ends_at: null };
         action = 'close_lot';
         event = result.winner
           ? `the hammer fell, sold to ${result.winner} for £${result.amount}`
@@ -302,7 +311,10 @@ async function runTick(code: string): Promise<TickResponse> {
 
   let say: string;
   let answeredMessageIds: string[];
-  if (process.env.MOCK_AUCTIONEER === '1' || !process.env.OPENAI_API_KEY) {
+  // "Going once, going twice" has seconds to land; a model round trip would put it on top of the hammer.
+  const lastCall = sale.phase === 'bidding' && !newBids.length && !questions.length
+    && ctx.secondsLeft !== null && ctx.secondsLeft <= CALL_SECONDS + 1;
+  if (lastCall || process.env.MOCK_AUCTIONEER === '1' || !process.env.OPENAI_API_KEY) {
     say = cannedSay(ctx);
     answeredMessageIds = ctx.questions.map((m) => m.id);
   } else {
@@ -376,4 +388,19 @@ export async function tick(code: string): Promise<TickResponse> {
 /** The hammer. Waits its turn rather than dropping: settlement is authoritative. */
 export async function closeLot(code: string): Promise<CloseLotResponse> {
   return withSaleLock(code.toUpperCase(), () => settleLot(code));
+}
+
+/** End the entire sale: honor the live winning bid, leave unoffered items unsold. */
+export async function endSale(code: string): Promise<void> {
+  await withSaleLock(code.toUpperCase(), async () => {
+    const sale = await findSale(code);
+    if (!sale) throw new Error('sale not found');
+    if (sale.phase === 'ended') return;
+    if (sale.phase === 'bidding') await settleLot(code);
+    const store = db();
+    for (const lot of await saleLots(sale.id)) {
+      if (lot.status === 'queued' || lot.status === 'live') await store.updateLot(lot.id, {status:'unsold'});
+    }
+    await store.updateSale(sale.id, {phase:'ended',lot_ends_at:null});
+  });
 }

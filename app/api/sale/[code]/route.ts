@@ -1,3 +1,5 @@
+import { startsAt } from "@/lib/sale-timing";
+import { waitingPreviews } from '@/lib/waiting-previews';
 import { ok, fail } from '@/lib/api';
 import { db } from '@/lib/db';
 import { closeLot } from '@/lib/auctioneer';
@@ -19,6 +21,9 @@ export async function GET(_request: Request, { params }: { params: Promise<{ cod
     }
 
     const store = db();
+    // Images are data URLs. Every phone polls this every second, so mid-sale only the lot on the block carries one;
+    // the lobby orbit and the closing receipts need them all.
+    const showAll = sale.phase === 'idle' || sale.phase === 'ended';
 
     const [lot, bids, messages, lots] = await Promise.all([
       sale.current_lot_id ? store.getLot(sale.current_lot_id) : Promise.resolve(null),
@@ -27,7 +32,7 @@ export async function GET(_request: Request, { params }: { params: Promise<{ cod
       saleLots(sale.id),
     ]);
 
-    return ok<SaleStateResponse>({ sale, lot, bids, messages, lots });
+    return ok<SaleStateResponse>({ sale: {...sale, starts_at: startsAt(sale.id)}, lot: lot ? {...lot, preview_generated: waitingPreviews.has(lot.id), image_url: waitingPreviews.get(lot.id) ?? lot.image_url} : null, bids, messages, lots: lots.map(item => ({ ...item, preview_generated: waitingPreviews.has(item.id), image_url: showAll || item.id === sale.current_lot_id ? waitingPreviews.get(item.id) ?? item.image_url : '' })) });
   } catch (e) {
     return fail(e instanceof Error ? e.message : 'sale lookup failed', 500);
   }

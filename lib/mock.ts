@@ -6,6 +6,7 @@ export type ScannedObject = {
   id: string;
   name: string;
   category: string;
+  generatedImage?: string;
   image: string;        // cutout or light-background product shot
   low: number;          // GBP estimate range
   high: number;
@@ -14,6 +15,8 @@ export type ScannedObject = {
   picked: boolean;
   /** True once `image` is an isolated cutout rather than a crop of the room. */
   cutout?: boolean;
+  maskUrl?: string;
+  confidence?: number;
   // Present once the object came from a real scan.
   reserve?: number;
   comps?: Comp[];
@@ -30,6 +33,9 @@ export function lotToObject(lot: Lot): ScannedObject {
     name: lot.name,
     category: lot.category,
     image: lot.image_url,
+    cutout: lot.cutout,
+    maskUrl: lot.mask_url,
+    confidence: lot.confidence,
     low: Number(lot.low ?? 0),
     high: Number(lot.high ?? 0),
     condition: lot.condition ?? 'Used',

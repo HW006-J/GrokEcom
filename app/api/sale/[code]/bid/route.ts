@@ -1,6 +1,7 @@
 import { ok, fail } from '@/lib/api';
 import { db } from '@/lib/db';
 import { findSale, openingBid } from '@/lib/sale';
+import { QUIET_SECONDS } from '@/lib/sale-timing';
 import type { BidResponse } from '@/lib/types';
 
 type Body = { bidder?: string; amount?: number };
@@ -45,6 +46,12 @@ export async function POST(request: Request, { params }: { params: Promise<{ cod
     const won = await store.casHighBid(sale.id, current, amount, bidder);
     if (!won) return fail('outbid, try again', 409);
     await store.insertBid({ sale_id: sale.id, lot_id: sale.current_lot_id, bidder, amount });
+    // Soft close: a bid always leaves the room a few seconds to answer it, so
+    // the lot ends when bidding goes quiet rather than at a fixed time.
+    const quiet = Date.now() + QUIET_SECONDS * 1000;
+    if (!sale.lot_ends_at || Date.parse(sale.lot_ends_at) < quiet) {
+      await store.updateSale(sale.id, { lot_ends_at: new Date(quiet).toISOString() });
+    }
   } catch (e) {
     return fail(e instanceof Error ? e.message : 'bid failed', 500);
   }

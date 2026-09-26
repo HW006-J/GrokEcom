@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { gbp, type Lot } from "@/lib/types";
 import type { DashboardResponse, Earnings, SaleSummary } from "@/lib/earnings";
 import { X, Chevron, Scan } from "@/components/icons";
+import { UnsoldDashboard } from "@/components/unsold-dashboard";
 
 export default function DashboardScreen() {
   const router = useRouter();
@@ -34,7 +35,7 @@ export default function DashboardScreen() {
     <main className="shell">
       <header className="pad safe-t" style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12 }}>
         <div>
-          <h1 className="display">Your earnings</h1>
+          <h1 className="display">Your sales</h1>
           <p className="sub" style={{ marginTop: 6 }}>
             {state === "loading" && "Adding it up…"}
             {state === "error" && "Could not load your sales."}
@@ -54,6 +55,7 @@ export default function DashboardScreen() {
           <>
             {earnings && <Hero earnings={earnings} />}
             {earnings && <Stats earnings={earnings} />}
+            {state === "ready" && <UnsoldDashboard lots={sales.flatMap((sale) => sale.lots)} />}
             {sales.map((s) => (
               <SaleCard
                 key={s.sale.id}

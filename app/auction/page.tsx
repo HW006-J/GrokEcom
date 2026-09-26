@@ -1,19 +1,26 @@
 "use client";
 
+import { TalkingAuctioneer } from "@/components/talking-auctioneer";
+
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { QRCodeSVG } from "qrcode.react";
-import type { AnamClient } from "@anam-ai/js-sdk";
 import { loadObjects } from "@/lib/store";
+import { EnableWinSound, WinSound } from "@/components/win-sound";
+import { SaleConfetti } from "@/components/sale-confetti";
+import { SaleReceipt } from "@/components/sale-receipt";
+import { WaitingOrbit } from "@/components/waiting-orbit";
+import { PriceEvidence } from "@/components/price-evidence";
+import { CALL_SECONDS, windowSeconds } from "@/lib/sale-timing";
+import { LiveBids } from "@/components/live-bids";
 import { gbp, type Lot, type Sale, type SaleStateResponse, type TickResponse } from "@/lib/types";
 import { X, Dots, Users, Clock, Pause, Play, Share, Check, Chevron } from "@/components/icons";
 
-const ROUND = 30;       // seconds of bidding per lot, matches lib/auctioneer.ts
-const TICK_MS = 8000;   // how often the auctioneer speaks
+const TICK_MS = 8000;   // backstop; the key moments are scheduled exactly below
 const NUDGE_MS = 1500;  // debounce before reacting to a bid or a question
 const STATE_MS = 1200;  // how often the stage re-reads the sale
 const SALE_KEY = "sellout.sale";
-const VIDEO_ID = "auctioneer-video";
+
 
 type Status = "opening" | "ready" | "empty" | "error";
 
@@ -42,6 +49,8 @@ export default function AuctionScreen() {
       const res = await fetch(`/api/sale/${saleCode}`).catch(() => null);
       if (!res?.ok) return false;
       const next = (await res.json()) as SaleStateResponse;
+      // A finished rehearsal must not swallow the next sale opened from this tab.
+      if (next.sale.phase === "ended") { sessionStorage.removeItem(SALE_KEY); return false; }
       if (cancelled) return true;
       setState(next);
       setCode(next.sale.code);
@@ -66,10 +75,11 @@ export default function AuctionScreen() {
             category: o.category,
             condition: o.condition,
             blurb: o.blurb,
-            image_url: o.image,
+            image_url: o.generatedImage || o.image,
             low: o.low,
             high: o.high,
             reserve: o.reserve ?? Math.round(o.low * 0.55),
+            comps: o.comps ?? [],
           })),
         }),
       }).catch(() => null);
@@ -130,13 +140,13 @@ export default function AuctionScreen() {
   }, [status, code]);
 
   /* ── The voice ───────────────────────────────────────────── */
-  const { speak, connect, avatar, speaking } = useAuctioneerVoice(mock);
+  const { speak, connect, avatar, speaking, analyser } = useAuctioneerVoice(mock, state?.sale.phase === "ended");
 
   /* ── Ticking, one at a time ──────────────────────────────── */
   const ticking = useRef(false);
 
   const doTick = useCallback(async () => {
-    if (!started || paused || !code || ticking.current || document.hidden) return;
+    if (!started || paused || !code || state?.sale.phase === "ended" || ticking.current || document.hidden) return;
     ticking.current = true;
     try {
       const res = await fetch(`/api/sale/${code}/tick`, { method: "POST" }).catch(() => null);
@@ -149,16 +159,38 @@ export default function AuctionScreen() {
     } finally {
       ticking.current = false;
     }
-  }, [started, paused, code, speak]);
+  }, [started, paused, code, speak, state?.sale.phase]);
 
   useEffect(() => { tickRef.current = doTick; }, [doTick]);
 
   useEffect(() => {
-    if (!started || paused || status !== "ready") return;
+    if (!started || paused || status !== "ready" || state?.sale.phase === "ended") return;
     doTick();
     const t = setInterval(doTick, TICK_MS);
     return () => clearInterval(t);
   }, [started, paused, status, doTick]);
+
+  /* ── Tick at the moments that matter, not just on the interval ── */
+  const phase = state?.sale.phase;
+  const endsAt = state?.sale.lot_ends_at ?? null;
+  const startAt = state?.sale.starts_at ?? null;
+  useEffect(() => {
+    if (!started || paused || !phase || phase === "ended") return;
+    const timers: ReturnType<typeof setTimeout>[] = [];
+    const at = (ms: number) => {
+      const fire = () => { if (ticking.current) timers.push(setTimeout(fire, 400)); else tickRef.current(); };
+      if (ms > 0) timers.push(setTimeout(fire, ms));
+    };
+    const t = Date.now();
+    if (phase === "idle" && startAt) at(Math.max(50, Date.parse(startAt) - t + 100));
+    if (phase === "presenting" && endsAt) at(Math.max(50, Date.parse(endsAt) - t + 100));
+    if (phase === "bidding" && endsAt) {
+      at(Date.parse(endsAt) - t - CALL_SECONDS * 1000); // going once, going twice
+      at(Math.max(50, Date.parse(endsAt) - t + 250));   // the hammer
+    }
+    if (phase === "sold") { at(4000); at(8000); }          // land the result, then the next lot
+    return () => timers.forEach(clearTimeout);
+  }, [started, paused, phase, endsAt, startAt]);
 
   /* ── Derived, entirely from the server ───────────────────── */
   const sale = state?.sale ?? null;
@@ -183,9 +215,36 @@ export default function AuctionScreen() {
     return `${window.location.origin}/join/${code}`;
   }, [code]);
 
+  const [startIn, setStartIn] = useState(30);
+  const [starting, setStarting] = useState(false);
+  const [ending, setEnding] = useState(false);
+  const [endPrompt, setEndPrompt] = useState(false);
+  const [endError, setEndError] = useState("");
+  const [previewNote, setPreviewNote] = useState("");
+  useEffect(() => {
+    if (!code || started) return;
+    let alive = true;
+    setPreviewNote("Creating clean previews…");
+    fetch(`/api/sale/${code}/previews`, {method:"POST"}).then(r => {
+      if (alive) setPreviewNote(r.ok ? "" : "Preview unavailable · refresh to retry");
+    }).catch(() => { if (alive) setPreviewNote("Preview unavailable · refresh to retry"); });
+    return () => { alive = false; };
+  }, [code, started]);
+
   const begin = async () => {
-    setStarted(true);
-    await connect();   // the tap is what lets the avatar play sound
+    if (starting) return;
+    setStarting(true); setEndError("");
+    // Unlock audio inside the tap itself: iOS Safari refuses once we have awaited anything.
+    const unlock = connect();
+    try {
+      const res = await fetch(`/api/sale/${code}/timing`,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({inSeconds:startIn})});
+      if (!res.ok && state?.sale.phase === "idle") throw new Error();
+      const { startsAt } = res.ok ? (await res.json()) as { startsAt: string } : { startsAt: null };
+      if (startsAt) setState(s => s && { ...s, sale: { ...s.sale, starts_at: startsAt } });
+      setStarted(true);
+      await unlock;
+    } catch {setEndError("Could not schedule the start. Try again.");}
+    finally {setStarting(false);}   // the tap is what lets the avatar play sound
   };
 
   /* ── States where there is nothing honest to show ────────── */
@@ -213,22 +272,26 @@ export default function AuctionScreen() {
     );
   }
 
-  const pct = settled || ended ? 100 : ((ROUND - left) / ROUND) * 100;
+  const span = windowSeconds(high);
+  const pct = settled || ended ? 100 : sale?.phase === "bidding" ? Math.min(100, ((span - left) / span) * 100) : 0;
+  const untilStart = sale?.starts_at ? Math.max(0, Math.ceil((Date.parse(sale.starts_at) - now) / 1000)) : null;
   const mmss = `${String(Math.floor(left / 60)).padStart(2, "0")}:${String(left % 60).padStart(2, "0")}`;
 
   return (
-    <main className="shell">
+    <main className="shell auction-shell"><EnableWinSound/>
       {/* Auctioneer */}
       <div style={{ position: "relative", padding: "0 12px", paddingTop: "max(12px, env(safe-area-inset-top))" }}>
         <div style={{ position: "relative", borderRadius: 20, overflow: "hidden", background: "#e9e9e7" }}>
-          <Auctioneer state={avatar} speaking={speaking} mock={mock} />
+          <Auctioneer state={avatar} speaking={speaking} mock={mock} analyser={analyser} />
+          {avatar === "failed" && <button className="avatar-retry" onClick={() => void connect()}>Retry auctioneer</button>}
           <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "flex-start", justifyContent: "space-between", padding: 12, pointerEvents: "none" }}>
             <button className="icon-btn" style={{ pointerEvents: "auto" }} aria-label="Leave" onClick={() => router.push("/objects")}><X size={18} /></button>
             <button className="icon-btn" style={{ pointerEvents: "auto" }} aria-label="More" onClick={() => setSheet(true)}><Dots size={18} /></button>
           </div>
+          {started && !ended && <LiveBids bids={state?.bids ?? []} lotId={lot?.id ?? null} now={now} hasCaption={!!line} />}
           {line && (
             <p
-              className="fade-in"
+              className="fade-in auction-caption"
               key={line}
               style={{
                 position: "absolute", left: 12, right: 12, bottom: 12, margin: 0,
@@ -244,18 +307,19 @@ export default function AuctionScreen() {
       </div>
 
       {/* Lot */}
-      <div style={{ flex: 1, minHeight: 0, display: "grid", placeItems: "center", padding: "10px 22px 0" }}>
+      <div className="auction-stage">
         {lot?.image_url ? (
           /* eslint-disable-next-line @next/next/no-img-element */
-          <img src={lot.image_url} alt={lot.name} style={{ maxWidth: "76%", maxHeight: "100%", objectFit: "contain" }} />
+          <img src={lot.image_url} alt={lot.name} className="auction-product" />
         ) : (
           <p className="meta">{ended ? "That's the sale" : "Waiting for the first lot"}</p>
         )}
       </div>
 
       {/* Details */}
-      <section className="pad safe-b" style={{ paddingTop: 6 }}>
+      <section className="pad safe-b auction-details" style={{ paddingTop: 6 }}>
         <h2 className="title">{lot?.name ?? (ended ? "Sale complete" : "Up next")}</h2>
+        {lot && !ended && <PriceEvidence comps={lot.comps} compact />}
 
         <div style={{ display: "flex", alignItems: "flex-end", justifyContent: "space-between", marginTop: 12 }}>
           <div>
@@ -300,8 +364,23 @@ export default function AuctionScreen() {
       </section>
 
       {/* The tap that lets the avatar speak, and starts the room */}
-      {!started && <StartGate onStart={begin} lots={lots.length} code={code} />}
+      {(!started || (sale?.phase === "idle" && untilStart !== null)) && <StartGate onStart={begin} lots={lots.length} code={code} url={shareUrl} items={lots} note={previewNote} startIn={startIn} onStartIn={setStartIn} untilStart={started ? untilStart : null} starting={starting} error={endError} />}
 
+      {started && sale?.phase === "presenting" && <div className="bidding-countdown" role="status"><span>Bidding starts in</span><strong key={Math.ceil((Date.parse(sale.lot_ends_at ?? "") - now) / 1000)}>{Math.max(0, Math.ceil((Date.parse(sale.lot_ends_at ?? "") - now) / 1000)) || "Go"}</strong></div>}
+      {started && !ended && <button className="end-auction-control" onClick={() => setEndPrompt(true)}>End auction</button>}
+      {endPrompt && !ended && <div className="end-auction-overlay" role="dialog" aria-modal="true" aria-labelledby="end-auction-title"><div>
+        <h2 id="end-auction-title">End the auction?</h2><p>The current highest bid wins. Remaining items won’t be sold.</p>
+        {endError && <p role="alert">{endError}</p>}
+        <button className="pill pill--primary" disabled={ending} onClick={async () => {
+          setEnding(true); setEndError("");
+          try {
+            const res = await fetch(`/api/sale/${code}/end`,{method:"POST"});
+            if (!res.ok) throw new Error();
+            const next = await fetch(`/api/sale/${code}`).then(r=>r.json()); setState(next); setEndPrompt(false);
+          } catch { setEndError("Could not end auction. Try again."); } finally {setEnding(false);}
+        }}>{ending ? "Ending…" : "End auction"}</button>
+        <button className="pill" disabled={ending} onClick={()=>setEndPrompt(false)}>Keep going</button>
+      </div></div>}
       {/* Hammer down */}
       {started && settled && lot && <WinnerFlash lot={lot} />}
 
@@ -321,211 +400,87 @@ export default function AuctionScreen() {
 
 type AvatarState = "idle" | "connecting" | "live" | "reconnecting" | "failed" | "mock";
 
-function useAuctioneerVoice(mock: boolean) {
-  const [avatar, setAvatar] = useState<AvatarState>("idle");
-  const [speaking, setSpeaking] = useState(false);
-
-  const clientRef = useRef<AnamClient | null>(null);
-  const readyRef = useRef(false);
-  const aliveRef = useRef(true);
-  const connectingRef = useRef(false);
-  const tokenRef = useRef<Promise<string> | null>(null);
-  const pending = useRef<string | null>(null);
-  const chain = useRef<Promise<void>>(Promise.resolve());
-  const connectRef = useRef<(again?: boolean) => Promise<void>>(async () => {});
-  const flushRef = useRef<() => void>(() => {});
-
-  const fetchToken = useCallback(() => {
-    const p = fetch("/api/session-token", { method: "POST" })
-      .then((r) => { if (!r.ok) throw new Error("session token"); return r.json(); })
-      .then((j: { sessionToken: string }) => j.sessionToken);
-    tokenRef.current = p;
-    return p;
-  }, []);
-
-  // Prefetch on load so the tap only has to attach media. Tokens last about an hour.
-  useEffect(() => {
-    aliveRef.current = true;
-    if (mock) { setAvatar("mock"); return; }
-
-    // Warm the connection before the tap.
-    const pre = document.createElement("link");
-    pre.rel = "preconnect";
-    pre.href = "https://api.anam.ai";
-    pre.crossOrigin = "";
-    document.head.appendChild(pre);
-
-    fetchToken().catch(() => {});
-    return () => {
-      aliveRef.current = false;
-      pre.remove();
-      clientRef.current?.stopStreaming().catch(() => {});
-      clientRef.current = null;
-    };
-  }, [mock, fetchToken]);
-
-  const flush = useCallback(() => {
-    const line = pending.current;
-    if (!line) return;
-    const client = clientRef.current;
-    if (!client || !readyRef.current) return; // stays queued until the session is ready
-    pending.current = null;
-
-    chain.current = chain.current.then(async () => {
-      setSpeaking(true);
+function useAuctioneerVoice(mock: boolean, ended: boolean) {
+  const [avatar,setAvatar] = useState<AvatarState>("idle");
+  const [speaking,setSpeaking] = useState(false);
+  const context = useRef<AudioContext | null>(null);
+  const analyser = useRef<AnalyserNode | null>(null);
+  const source = useRef<AudioBufferSourceNode | null>(null);
+  const request = useRef<AbortController | null>(null);
+  const generation = useRef(0);
+  const stopped = useRef(ended);
+  const pendingLine = useRef("");
+  const connect = useCallback(async () => {
+    if(stopped.current) return;
+    context.current ??= new AudioContext();
+    await context.current.resume();
+    setAvatar("live");
+  },[]);
+  const speak = useCallback((text:string) => {
+    if(stopped.current || !text.trim()) return;
+    pendingLine.current=text;
+    const turn=++generation.current;
+    request.current?.abort();
+    source.current?.stop(); source.current=null;
+    setSpeaking(false);
+    const controller=new AbortController();request.current=controller;
+    void (async()=>{
       try {
-        await client.talk(line);
-      } catch {
-        // a dropped line is better than a stuck queue
-      }
-      // Let the line land before the next one starts, so calls never overlap.
-      const settle = Math.min(6000, 400 + line.length * 55);
-      await new Promise((r) => setTimeout(r, settle));
-      setSpeaking(false);
-      if (pending.current) flushRef.current();
-    });
-  }, []);
-
-  useEffect(() => { flushRef.current = flush; }, [flush]);
-
-  const connect = useCallback(async (again = false) => {
-    if (mock || connectingRef.current || clientRef.current) return;
-    connectingRef.current = true;
-    setAvatar(again ? "reconnecting" : "connecting");
-    try {
-      const token = await (tokenRef.current ?? fetchToken());
-      const { createClient, AnamEvent } = await import("@anam-ai/js-sdk");
-      const c = createClient(token, { disableInputAudio: true });
-      readyRef.current = false;
-
-      c.addListener(AnamEvent.SESSION_READY, () => {
-        if (!aliveRef.current) return;
-        readyRef.current = true;
-        setAvatar("live");
-        flushRef.current();          // say whatever arrived while we were connecting
-      });
-
-      c.addListener(AnamEvent.CONNECTION_CLOSED, () => {
-        // The free tier caps a session at three minutes. Start another and
-        // keep the newest unspoken line so the sale does not lose its voice.
-        readyRef.current = false;
-        clientRef.current = null;
-        connectingRef.current = false;
-        tokenRef.current = null;
-        if (!aliveRef.current) return;
-        setAvatar("reconnecting");
-        fetchToken().catch(() => {});
-        setTimeout(() => connectRef.current(true), 800);
-      });
-
-      await c.streamToVideoElement(VIDEO_ID);
-      clientRef.current = c;
-      connectingRef.current = false;
-      flushRef.current();
-    } catch {
-      connectingRef.current = false;
-      tokenRef.current = null;
-      if (!aliveRef.current) return;
-      setAvatar("failed");
-      setTimeout(() => { if (aliveRef.current) connectRef.current(true); }, 4000);
-    }
-  }, [mock, fetchToken]);
-
-  useEffect(() => { connectRef.current = connect; }, [connect]);
-
-  const speak = useCallback((text: string) => {
-    const line = text.trim();
-    if (!line) return;
-
-    if (mock) {
-      try {
-        const synth = window.speechSynthesis;
-        if (!synth) return;
-        synth.cancel();
-        const u = new SpeechSynthesisUtterance(line);
-        const v = synth.getVoices().find((x) => /en-GB/i.test(x.lang)) ?? synth.getVoices().find((x) => /^en/i.test(x.lang));
-        if (v) u.voice = v;
-        u.rate = 1.08;
-        u.onstart = () => setSpeaking(true);
-        u.onend = () => setSpeaking(false);
-        synth.speak(u);
-      } catch {}
-      return;
-    }
-
-    pending.current = line;   // freshest line wins
-    flushRef.current();
-  }, [mock]);
-
-  return { speak, connect, avatar, speaking };
+        context.current ??= new AudioContext();
+        const res=await fetch("/api/voice",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({text}),signal:controller.signal});
+        if(!res.ok) throw new Error("Voice unavailable");
+        const buffer=await context.current.decodeAudioData(await res.arrayBuffer());
+        if(stopped.current || turn!==generation.current) return;
+        await context.current.resume();
+        if(stopped.current || turn!==generation.current) return;
+        const audio=context.current.createBufferSource();audio.buffer=buffer;
+        analyser.current?.disconnect();
+        const meter=context.current.createAnalyser();meter.fftSize=512;
+        analyser.current=meter;audio.connect(meter);meter.connect(context.current.destination);
+        source.current=audio;setSpeaking(true);setAvatar("live");
+        audio.onended=()=>{if(turn===generation.current)setSpeaking(false);};audio.start();
+      } catch {if(!controller.signal.aborted && !stopped.current){setAvatar("failed");setSpeaking(false);}}
+    })();
+  },[]);
+  const retry = useCallback(async()=>{await connect();if(pendingLine.current)speak(pendingLine.current);},[connect,speak]);
+  useEffect(()=>{
+    // Take no new lines once the sale is over, but let the sign-off already playing finish.
+    stopped.current=ended;
+  },[ended]);
+  useEffect(()=>()=>{stopped.current=true;generation.current++;request.current?.abort();source.current?.stop();void context.current?.close();},[]);
+  return {speak,connect:retry,avatar,analyser,speaking: speaking && !ended};
 }
 
-function Auctioneer({ state, speaking, mock }: { state: AvatarState; speaking: boolean; mock: boolean }) {
-  const label =
-    state === "mock" ? "REHEARSAL"
-    : state === "live" ? "LIVE"
-    : state === "connecting" ? "CONNECTING"
-    : state === "reconnecting" ? "RECONNECTING"
-    : state === "failed" ? "NO AVATAR"
-    : "READY";
-
-  const dot =
-    state === "live" ? (speaking ? "#3ddc84" : "#c9c9c9")
-    : state === "failed" ? "#e2564a"
-    : state === "mock" ? "#8a8a8a"
-    : "#f0b429";
-
-  return (
-    <div style={{ position: "relative", width: "100%", aspectRatio: "4 / 3", background: "#e9e9e7" }}>
-      <video
-        id={VIDEO_ID}
-        autoPlay
-        playsInline
-        className="auctioneer"
-        style={{ height: "100%", display: state === "live" || state === "connecting" ? "block" : "none" }}
-      />
-      {!(state === "live" || state === "connecting") && (
-        <div style={{ position: "absolute", inset: 0, display: "grid", placeItems: "center", background: "#e9e9e7" }}>
-          <p className="meta" style={{ color: "var(--ink-3)" }}>
-            {state === "failed" ? "Auctioneer unavailable" : state === "mock" ? "Rehearsal voice" : "Auctioneer standing by"}
-          </p>
-        </div>
-      )}
-      <span
-        style={{
-          position: "absolute", left: 12, top: 12,
-          display: "inline-flex", alignItems: "center", gap: 6,
-          padding: "5px 10px", borderRadius: 999,
-          background: "rgba(20,20,20,.5)", backdropFilter: "blur(12px)",
-          color: "#fff", fontSize: 11, fontFamily: "var(--mono)", letterSpacing: ".06em",
-        }}
-      >
-        <span
-          style={{
-            width: 6, height: 6, borderRadius: 999, background: dot,
-            animation: speaking && state === "live" ? "blink 1.2s ease-in-out infinite" : undefined,
-          }}
-        />
-        {label}
-      </span>
-      <style>{`@keyframes blink { 0%,100%{opacity:1} 50%{opacity:.35} }`}</style>
-    </div>
-  );
+function Auctioneer({ state, speaking, analyser }: { state: AvatarState; speaking:boolean; mock:boolean; analyser: React.RefObject<AnalyserNode | null> }) {
+  return <div className="character-stage" data-speaking={speaking}>
+    {/* eslint-disable-next-line @next/next/no-img-element */}
+    <TalkingAuctioneer analyser={analyser} speaking={speaking}/>
+    <div className="character-status">{state==="failed" ? "Voice unavailable" : speaking ? "Speaking" : "Your auctioneer"}<span className="voice-bars" aria-hidden="true"><i/><i/><i/><i/></span></div>
+  </div>;
 }
 
-/* ── The tap that starts the room ───────────────────────────── */
-function StartGate({ onStart, lots, code }: { onStart: () => void; lots: number; code: string | null }) {
+function StartGate({ onStart, lots, code, url, items, note, startIn, onStartIn, untilStart, starting, error }: { startIn: number; onStartIn: (n:number)=>void; untilStart: number | null; starting:boolean; error:string; items: Lot[]; note: string; onStart: () => void; lots: number; code: string | null; url: string }) {
   return (
-    <div style={{ position: "absolute", inset: 0, zIndex: 25, background: "rgba(255,255,255,.92)", backdropFilter: "blur(6px)", display: "grid", placeItems: "center", padding: 24 }}>
-      <div style={{ textAlign: "center", maxWidth: 300 }}>
-        <p className="meta">{code ? `Room ${code}` : "Getting ready"}</p>
-        <h2 className="display" style={{ marginTop: 10 }}>Ready when you are</h2>
-        <p className="sub" style={{ marginTop: 8 }}>
-          {lots} {lots === 1 ? "lot" : "lots"} up. Share the room first, then start the auctioneer.
-        </p>
-        <button className="pill pill--primary" style={{ width: "100%", marginTop: 20 }} onClick={onStart}>
-          Start the sale <Chevron size={17} />
-        </button>
+    <div className="sale-start sale-start--orbit">
+      <header className="waiting-host-header"><h2>In your orbit.</h2><p>{code ? `Room ${code}` : "Getting ready"} · {lots} {lots === 1 ? "item" : "items"}</p></header>
+      <WaitingOrbit lots={items}/>
+      <div className="sale-start-content">
+        <p className="sale-start-room">{code ? `Room ${code}` : "Getting ready"}<span aria-hidden="true"> · </span>{lots} {lots === 1 ? "item" : "items"}</p>
+
+        <p className="waiting-preview-note" role="status">{note}</p>
+        {url && <div className="lobby-qr"><QRCodeSVG value={url} size={200} marginSize={2}/></div>}
+        <a className="lobby-link" href={url} target="_blank" rel="noreferrer">Scan to join ↗</a>
+        {untilStart !== null ? <div className="bidding-countdown" role="timer" aria-live="polite" style={{ position: "static", transform: "none" }}>
+          <span>Auction starts in</span><strong>{untilStart ? `${Math.floor(untilStart / 60)}:${String(untilStart % 60).padStart(2, "0")}` : "Go"}</strong>
+        </div> : <>
+          <label className="duration-picker">Start the auction<select value={startIn} onChange={e=>onStartIn(Number(e.target.value))} disabled={starting}>
+            <option value={0}>Now</option><option value={30}>In 30 seconds</option><option value={60}>In 1 minute</option><option value={120}>In 2 minutes</option><option value={300}>In 5 minutes</option>
+          </select></label>
+          {error && <p role="alert">{error}</p>}
+          <button className="pill pill--primary" disabled={starting} onClick={onStart}>
+            {startIn ? "Start countdown" : "Start auction"} <Chevron size={17} />
+          </button>
+        </>}
       </div>
     </div>
   );
@@ -541,6 +496,7 @@ function WinnerFlash({ lot }: { lot: Lot }) {
 
   return (
     <div className="fade-in" style={{ position: "absolute", inset: 0, zIndex: 24, background: "rgba(255,255,255,.96)", display: "grid", placeItems: "center", padding: 28 }}>
+      {sold && <><WinSound id={lot.id}/><SaleConfetti id={lot.id}/></>}
       <div style={{ textAlign: "center", width: "100%" }}>
         {lot.image_url && (
           /* eslint-disable-next-line @next/next/no-img-element */
@@ -548,7 +504,7 @@ function WinnerFlash({ lot }: { lot: Lot }) {
         )}
         <p className="meta" style={{ marginTop: 20 }}>{sold ? "Sold" : "Unsold"}</p>
         <p className="numeral" style={{ margin: "4px 0 0" }}>{sold ? gbp(Number(lot.sold_for ?? 0)) : "—"}</p>
-        <p className="title" style={{ marginTop: 10 }}>{sold ? `to ${lot.sold_to}` : "No bids"}</p>
+        <p className="title" style={{ marginTop: 10 }}>{sold ? `${lot.sold_to} has won the item` : "No bids"}</p>
         <p className="sub" style={{ marginTop: 6 }}>{lot.name}</p>
       </div>
     </div>
@@ -568,7 +524,7 @@ function SaleSummary({ lots, raised, onDone }: { lots: Lot[]; raised: number; on
       </header>
 
       <div style={{ flex: 1, overflowY: "auto", padding: "14px 22px 4px" }}>
-        {lots.map((l) => (
+        {lots.map((l) => l.status === "sold" ? <SaleReceipt key={l.id} lot={l}/> : (
           <div key={l.id} style={{ display: "flex", alignItems: "center", gap: 14, padding: "12px 0", borderBottom: "1px solid var(--line)" }}>
             <span style={{ width: 52, height: 52, borderRadius: 12, background: "#f6f6f4", overflow: "hidden", flex: "0 0 auto" }}>
               {l.image_url && (
@@ -579,11 +535,11 @@ function SaleSummary({ lots, raised, onDone }: { lots: Lot[]; raised: number; on
             <span style={{ flex: 1, minWidth: 0 }}>
               <span style={{ display: "block", fontSize: 15, fontWeight: 500, letterSpacing: "-.2px" }}>{l.name}</span>
               <span className="meta" style={{ textTransform: "none" }}>
-                {l.status === "sold" ? `to ${l.sold_to}` : "no bids"}
+                No bids
               </span>
             </span>
-            <span style={{ fontSize: 15, fontVariantNumeric: "tabular-nums", color: l.status === "sold" ? "var(--ink)" : "var(--ink-3)" }}>
-              {l.status === "sold" ? gbp(Number(l.sold_for ?? 0)) : "—"}
+            <span style={{ fontSize: 15, fontVariantNumeric: "tabular-nums", color: "var(--ink-3)" }}>
+              —
             </span>
           </div>
         ))}

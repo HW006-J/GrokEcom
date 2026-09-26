@@ -1,7 +1,7 @@
 import { ok, fail } from '@/lib/api';
 import { db, type NewLot as NewLotRow } from '@/lib/db';
 import { makeCode } from '@/lib/sale';
-import type { CreateSaleResponse, Lot, Sale } from '@/lib/types';
+import type { Comp, CreateSaleResponse, Lot, Sale } from '@/lib/types';
 
 /**
  * POST /api/sale
@@ -19,6 +19,7 @@ type NewLot = {
   low?: number;
   high?: number;
   reserve?: number;
+  comps?: Comp[];
 };
 
 type Body = { lotIds?: string[]; lots?: NewLot[]; title?: string };
@@ -31,6 +32,12 @@ const cleanName = (v: unknown): string | null => {
   const n = v.trim().slice(0, NAME_MAX);
   return n.length ? n : null;
 };
+
+/** The evidence behind a price travels with the lot so bidders can see it. */
+const cleanComps = (v: unknown): Comp[] => !Array.isArray(v) ? [] : v
+  .filter((c): c is Comp => !!c && typeof c.url === 'string' && /^https?:\/\//.test(c.url) && Number(c.price) > 0)
+  .slice(0, 4)
+  .map(c => ({ title: String(c.title ?? '').slice(0, 120), price: Math.round(Number(c.price)), url: c.url, source: String(c.source ?? '').slice(0, 40) }));
 
 export async function POST(request: Request) {
   const body = (await request.json().catch(() => null)) as Body | null;
@@ -107,6 +114,7 @@ export async function POST(request: Request) {
         low: s.low,
         high: s.high,
         reserve: s.reserve ?? (s.low ? Math.round(s.low * 0.55) : undefined),
+        comps: cleanComps(s.comps),
         picked: true,
         status: 'queued',
         sort_order: base + i + 1,

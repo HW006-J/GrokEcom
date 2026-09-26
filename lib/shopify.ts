@@ -13,6 +13,7 @@ async function gql<T>(query: string, variables: Record<string, unknown>): Promis
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'X-Shopify-Access-Token': token },
     body: JSON.stringify({ query, variables }),
+    signal: AbortSignal.timeout(4000), // the hammer waits on this; never let it hang
   });
   const json = (await res.json()) as { data?: T; errors?: { message: string }[] };
   if (!res.ok || json.errors?.length) {
