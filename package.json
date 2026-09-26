@@ -10,9 +10,9 @@
   },
   "dependencies": {
     "@anam-ai/js-sdk": "^4.27.1",
-    "@anthropic-ai/sdk": "^0.128.0",
     "@supabase/supabase-js": "^2.117.2",
     "next": "16.3.6",
+    "openai": "^7.23.0",
     "qrcode.react": "^4.2.0",
     "react": "19.2.8",
     "react-dom": "19.2.8"

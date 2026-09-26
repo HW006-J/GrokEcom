@@ -1,6 +1,6 @@
 // Run-of-show state machine + host brain. Called by /api/host/tick (stage page polls every ~8s).
 import { supabaseServer } from '@/lib/supabase';
-import { structured } from '@/lib/claude';
+import { structured } from '@/lib/llm';
 import { createDraftOrderInvoice, shopifyConfigured } from '@/lib/shopify';
 import type { Bid, HostAction, HostTickResponse, Item, Message, Show, AuctionCloseResponse } from '@/lib/types';
 
@@ -87,14 +87,14 @@ function mockSay(c: Ctx): string {
   }
 }
 
-async function claudeSay(c: Ctx): Promise<{ say: string; answeredMessageIds: string[] }> {
+async function llmSay(c: Ctx): Promise<{ say: string; answeredMessageIds: string[] }> {
   const system = `You are Cara, the host of a live second-hand fashion show. Upbeat, warm, concise: at most 2 short sentences, spoken aloud. Answer audience questions using ONLY the item JSON; if the answer is not there say you'll check with the seller. Call bidders by name. During an auction keep the energy up; in the last 15 seconds hard-sell and count down. Prices are in pounds. Never invent facts.`;
   const content = `Phase: ${c.show.phase}\nEvent: ${c.event}\nItem: ${JSON.stringify(c.item)}\nSeconds left: ${c.secondsLeft ?? 'n/a'}\nHigh bid: ${c.show.high_bid ?? 'none'} by ${c.show.high_bidder_name ?? 'nobody'}\nNew bids since last check: ${JSON.stringify(c.newBids.map((b) => ({ name: b.bidder_name, amount: b.amount })))}\nUnanswered questions: ${JSON.stringify(c.questions.map((m) => ({ id: m.id, name: m.name, text: m.text })))}\nItems remaining after this one: ${c.remaining}`;
   return structured<{ say: string; answeredMessageIds: string[] }>({
     system,
     content,
-    toolName: 'host_line',
-    maxTokens: 200,
+    name: 'host_line',
+    maxTokens: 300,
     schema: {
       properties: {
         say: { type: 'string', description: 'What the host says next, max 2 sentences' },
@@ -205,14 +205,14 @@ export async function tick(showId: string): Promise<HostTickResponse> {
 
   let say: string;
   let answeredMessageIds: string[];
-  if (process.env.MOCK_HOST === '1' || !process.env.ANTHROPIC_API_KEY) {
+  if (process.env.MOCK_HOST === '1' || !process.env.OPENAI_API_KEY) {
     say = mockSay(ctx);
     answeredMessageIds = ctx.questions.map((m) => m.id);
   } else {
     try {
-      ({ say, answeredMessageIds } = await claudeSay(ctx));
+      ({ say, answeredMessageIds } = await llmSay(ctx));
     } catch (e) {
-      console.warn('claude tick failed, using mock line:', e);
+      console.warn('llm tick failed, using mock line:', e);
       say = mockSay(ctx);
       answeredMessageIds = ctx.questions.map((m) => m.id);
     }

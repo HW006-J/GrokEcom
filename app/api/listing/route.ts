@@ -1,10 +1,10 @@
 import { ok, fail } from '@/lib/api';
 import { supabaseServer } from '@/lib/supabase';
-import { structured } from '@/lib/claude';
+import { structured, imagePart } from '@/lib/llm';
+import type OpenAI from 'openai';
 import { searchComps } from '@/lib/tavily';
 import { createProduct, shopifyConfigured } from '@/lib/shopify';
 import type { Item, ListingResponse } from '@/lib/types';
-import type Anthropic from '@anthropic-ai/sdk';
 
 export const maxDuration = 60;
 
@@ -26,13 +26,13 @@ export async function POST(request: Request) {
   const showId = String(form.get('showId') ?? '');
   const photos = form.getAll('photos').filter((p): p is File => p instanceof File && p.size > 0);
   if (!showId || photos.length === 0) return fail('showId and at least one photo are required');
-  if (!process.env.ANTHROPIC_API_KEY) return fail('ANTHROPIC_API_KEY not set', 500);
+  if (!process.env.OPENAI_API_KEY) return fail('OPENAI_API_KEY not set', 500);
 
   const db = supabaseServer();
 
   // 1. Upload photos
   const imageUrls: string[] = [];
-  const imageBlocks: Anthropic.ImageBlockParam[] = [];
+  const imageBlocks: OpenAI.Chat.Completions.ChatCompletionContentPart[] = [];
   for (const photo of photos.slice(0, 4)) {
     const buf = Buffer.from(await photo.arrayBuffer());
     const ext = (photo.type.split('/')[1] || 'jpg').replace('jpeg', 'jpg');
@@ -42,15 +42,15 @@ export async function POST(request: Request) {
     imageUrls.push(db.storage.from('photos').getPublicUrl(path).data.publicUrl);
     const mediaType = (['image/jpeg', 'image/png', 'image/webp', 'image/gif'].includes(photo.type) ? photo.type : 'image/jpeg') as
       | 'image/jpeg' | 'image/png' | 'image/webp' | 'image/gif';
-    imageBlocks.push({ type: 'image', source: { type: 'base64', media_type: mediaType, data: buf.toString('base64') } });
+    imageBlocks.push(imagePart(buf.toString('base64'), mediaType));
   }
 
   // 2. Vision listing
   const listing = await structured<Listing>({
     system: 'You are an expert second-hand fashion reseller writing Depop/Vinted listings. Be specific and honest. Guess brand and size from labels if visible, otherwise your best estimate marked with "approx". Condition is "N/5 - short note".',
     content: [...imageBlocks, { type: 'text', text: 'Create a listing for this item.' }],
-    toolName: 'listing',
-    maxTokens: 500,
+    name: 'listing',
+    maxTokens: 800,
     schema: {
       properties: {
         title: { type: 'string' }, brand: { type: 'string' }, category: { type: 'string' }, size: { type: 'string' },
@@ -69,8 +69,8 @@ export async function POST(request: Request) {
     const priced = await structured<{ price_estimate: number; rationale: string }>({
       system: 'You price second-hand clothing for the UK market in GBP. Use the comps if present, otherwise your knowledge of resale prices. Return a realistic quick-sale price.',
       content: `Listing: ${JSON.stringify(listing)}\nComps: ${JSON.stringify(comps)}`,
-      toolName: 'price',
-      maxTokens: 150,
+      name: 'price',
+      maxTokens: 300,
       schema: {
         properties: { price_estimate: { type: 'number' }, rationale: { type: 'string' } },
         required: ['price_estimate', 'rationale'],
