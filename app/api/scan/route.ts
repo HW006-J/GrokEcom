@@ -114,7 +114,14 @@ export async function POST(req: NextRequest) {
   }
 }
 
-/** Upload the cutout, or inline a small one when there is nowhere to put it. */
+/**
+ * Upload the plain crop, or inline a small one when there is nowhere to put it.
+ *
+ * This is deliberately just a crop: it keeps the scan at around nine seconds so the
+ * outlines appear straight away. The client then posts this same `image_url` to
+ * /api/cutout, which lifts the object off its background and hands back a
+ * transparent replacement. No extra field is needed for that round trip.
+ */
 async function cutout(
   client: SupabaseClient | null,
   frame: Buffer,
