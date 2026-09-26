@@ -73,6 +73,13 @@ const run = async () => {
   await shot(page, '06-review-priced');
   log.push(`priced header: ${(await page.locator('p.sub').first().innerText().catch(() => '—'))}`);
 
+  // give the cutouts, started on this screen, time to land
+  await page.waitForTimeout(45_000);
+  await shot(page, '06b-review-cutouts');
+  log.push(`cutouts ready on review: ${await page.evaluate(() => {
+    try { return (JSON.parse(sessionStorage.getItem('sellout.objects')) || []).filter(o => o.cutout).length; } catch { return 'n/a'; }
+  })}`);
+
   // 4. Into the cloud
   await page.click('text=/^Sell \\d+/').catch(() => log.push('WARN: no Sell button'));
   await page.waitForURL('**/objects', { timeout: 15_000 }).catch(() => log.push('WARN: did not reach /objects'));
@@ -81,8 +88,9 @@ const run = async () => {
   log.push(`cloud objects: ${await page.locator('.obj').count()}`);
 
   // give cutouts a chance to swap in
-  await page.waitForTimeout(35_000);
+  await page.waitForTimeout(12_000);
   await shot(page, '08-cloud-cutouts');
+  log.push(`cloud placeholders: ${await page.locator('.obj-pending').count()}, images: ${await page.locator('.obj img').count()}`);
 
   // 5. The sale
   await page.click('text=/Start the sale/').catch(() => log.push('WARN: no Start the sale button'));

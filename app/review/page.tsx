@@ -59,6 +59,35 @@ export default function ReviewScreen() {
     });
   }, [objects]);
 
+  // Isolating an object takes ~20s, so start it the moment we have objects.
+  // By the time anyone reaches the cloud most cutouts have already landed.
+  const cutting = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    const todo = objects.filter((o) => !o.cutout && o.image && !cutting.current.has(o.id));
+    if (todo.length === 0) return;
+    todo.forEach((o) => cutting.current.add(o.id));
+
+    todo.forEach(async (o) => {
+      try {
+        const res = await fetch("/api/cutout", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ imageUrl: o.image }),
+        });
+        if (!res.ok) throw new Error(String(res.status));
+        const { imageUrl } = (await res.json()) as { imageUrl?: string };
+        if (!imageUrl) return;
+        setObjects((prev) => {
+          const next = prev.map((x) => (x.id === o.id ? { ...x, image: imageUrl, cutout: true } : x));
+          saveObjects(next);
+          return next;
+        });
+      } catch {
+        // the crop still works on the review photo; the cloud will just wait
+      }
+    });
+  }, [objects]);
+
   const toggle = (id: string) => {
     setFocus(id);
     setObjects((prev) => {

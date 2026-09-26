@@ -12,7 +12,6 @@ export default function ObjectsScreen() {
   const [objects, setObjects] = useState<ScannedObject[]>([]);
   const [view, setView] = useState<"cloud" | "list">("cloud");
   const [focus, setFocus] = useState(0);
-  const [cut, setCut] = useState<Set<string>>(new Set());
   const asked = useRef<Set<string>>(new Set());
 
   // Only what was chosen on the photo makes it into the sale. Nothing is invented.
@@ -24,7 +23,7 @@ export default function ObjectsScreen() {
 
   // Lift each object off its background so the cloud reads as cutouts, not crops.
   useEffect(() => {
-    const todo = objects.filter((o) => !asked.current.has(o.id));
+    const todo = objects.filter((o) => !o.cutout && o.image && !asked.current.has(o.id));
     if (todo.length === 0) return;
     todo.forEach((o) => asked.current.add(o.id));
 
@@ -39,11 +38,10 @@ export default function ObjectsScreen() {
         const { imageUrl } = (await res.json()) as { imageUrl: string };
         if (!imageUrl) return;
         setObjects((prev) => {
-          const next = prev.map((x) => (x.id === o.id ? { ...x, image: imageUrl } : x));
+          const next = prev.map((x) => (x.id === o.id ? { ...x, image: imageUrl, cutout: true } : x));
           saveObjects(next);
           return next;
         });
-        setCut((c) => new Set(c).add(o.id));
       } catch {
         // the crop still reads fine blended over white
       }
@@ -97,7 +95,7 @@ export default function ObjectsScreen() {
       </header>
 
       {view === "cloud" ? (
-        <Cloud objects={objects} cut={cut} focus={focus} setFocus={setFocus} />
+        <Cloud objects={objects} focus={focus} setFocus={setFocus} />
       ) : (
         <ListView objects={objects} onDrop={drop} />
       )}
@@ -122,10 +120,9 @@ export default function ObjectsScreen() {
 type Body = { id: string; x: number; y: number; vx: number; vy: number; r: number; seed: number };
 
 function Cloud({
-  objects, cut, focus, setFocus,
+  objects, focus, setFocus,
 }: {
   objects: ScannedObject[];
-  cut: Set<string>;
   focus: number;
   setFocus: (i: number) => void;
 }) {
@@ -134,6 +131,7 @@ function Cloud({
   const bodies = useRef<Map<string, Body>>(new Map());
   const list = useRef<ScannedObject[]>(objects);
   const focusRef = useRef(focus);
+  const chipRef = useRef<HTMLSpanElement>(null);
   const [chip, setChip] = useState<{ x: number; y: number } | null>(null);
 
   list.current = objects;
@@ -155,7 +153,7 @@ function Cloud({
       h = rect.height;
       const items = list.current;
       const n = Math.max(1, items.length);
-      const base = Math.sqrt((w * h * 0.40) / (Math.PI * n));
+      const base = Math.sqrt((w * h * 0.34) / (Math.PI * n));
       const r = Math.min(base, Math.min(w, h) * 0.30);
 
       const seen = new Set<string>();
@@ -205,7 +203,7 @@ function Cloud({
             const dx = c.x - a.x;
             const dy = c.y - a.y;
             const d = Math.hypot(dx, dy) || 0.001;
-            const min = a.r + c.r + 10;
+            const min = a.r + c.r + 20;
             if (d < min) {
               const push = (min - d) / 2;
               const ux = dx / d;
@@ -235,9 +233,10 @@ function Cloud({
       const f = list.current[focusRef.current];
       const fb = f ? bodies.current.get(f.id) : undefined;
       if (fb) {
+        const half = (chipRef.current?.offsetWidth ?? 180) / 2 + 10;
         const above = fb.y - fb.r - 20;
         setChip({
-          x: Math.max(96, Math.min(w - 96, fb.x)),
+          x: Math.max(half, Math.min(w - half, fb.x)),
           y: above < 30 ? fb.y + fb.r + 20 : above,
         });
       }
@@ -266,13 +265,9 @@ function Cloud({
           onClick={() => setFocus(i)}
           aria-label={`${o.name}, ${gbp(o.low)} to ${gbp(o.high)}`}
         >
-          {o.image ? (
+          {o.cutout && o.image ? (
             /* eslint-disable-next-line @next/next/no-img-element */
-            <img
-              src={o.image}
-              alt=""
-              style={{ mixBlendMode: cut.has(o.id) ? "normal" : "multiply" }}
-            />
+            <img src={o.image} alt="" />
           ) : (
             <span className="obj-pending" aria-hidden />
           )}
@@ -281,7 +276,7 @@ function Cloud({
       ))}
 
       {chip && current && (
-        <span className="chip" style={{ left: chip.x, top: chip.y }}>
+        <span ref={chipRef} className="chip" style={{ left: chip.x, top: chip.y }}>
           <span className="chip-name">{current.name}</span>
           <span className="chip-price">{gbp(current.low)}–{gbp(current.high)}</span>
         </span>
@@ -299,7 +294,7 @@ function ListView({ objects, onDrop }: { objects: ScannedObject[]; onDrop: (id: 
         <div key={o.id} style={{ display: "flex", alignItems: "center", gap: 14, padding: "12px 0", borderBottom: "1px solid var(--line)" }}>
           <span style={{ width: 58, height: 58, borderRadius: 14, background: "#f6f6f4", display: "grid", placeItems: "center", overflow: "hidden", flex: "0 0 auto" }}>
             {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img src={o.image} alt="" style={{ width: "100%", height: "100%", objectFit: "contain" }} />
+            <img src={o.image} alt="" style={{ width: "100%", height: "100%", objectFit: o.cutout ? "contain" : "cover" }} />
           </span>
           <span style={{ flex: 1, minWidth: 0 }}>
             <span style={{ display: "block", fontSize: 15, fontWeight: 500, letterSpacing: "-.2px" }}>{o.name}</span>
