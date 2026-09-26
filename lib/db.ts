@@ -42,6 +42,14 @@ export interface SaleStore {
   recentMessages(saleId: string, limit: number): Promise<SaleMessage[]>;
   unansweredMessages(saleId: string, limit: number): Promise<SaleMessage[]>;
   markAnswered(ids: string[]): Promise<void>;
+
+  // ── Read-only, for the seller's dashboard ──
+  /** Most recent sales first. */
+  recentSales(limit: number): Promise<Sale[]>;
+  /** Every lot belonging to any of these sales, whatever its status. */
+  lotsForSales(saleIds: string[]): Promise<Lot[]>;
+  /** Settled lots that found a buyer, most recent first. */
+  soldLots(limit: number): Promise<Lot[]>;
 }
 
 // ── Supabase backend ────────────────────────────────────────
@@ -165,6 +173,31 @@ class SupabaseStore implements SaleStore {
   async markAnswered(ids: string[]): Promise<void> {
     if (ids.length === 0) return;
     await this.db().from('sale_messages').update({ answered: true }).in('id', ids);
+  }
+
+  async recentSales(limit: number): Promise<Sale[]> {
+    const { data } = await this.db()
+      .from('sales')
+      .select('*')
+      .order('created_at', { ascending: false })
+      .limit(limit);
+    return (data ?? []) as Sale[];
+  }
+
+  async lotsForSales(saleIds: string[]): Promise<Lot[]> {
+    if (saleIds.length === 0) return [];
+    const { data } = await this.db().from('lots').select('*').in('sale_id', saleIds).order('sort_order');
+    return (data ?? []) as Lot[];
+  }
+
+  async soldLots(limit: number): Promise<Lot[]> {
+    const { data } = await this.db()
+      .from('lots')
+      .select('*')
+      .eq('status', 'sold')
+      .order('created_at', { ascending: false })
+      .limit(limit);
+    return (data ?? []) as Lot[];
   }
 }
 
@@ -352,6 +385,29 @@ class MemoryStore implements SaleStore {
   async markAnswered(ids: string[]): Promise<void> {
     const set = new Set(ids);
     for (const m of mem.messages) if (set.has(m.id)) m.answered = true;
+  }
+
+  async recentSales(limit: number): Promise<Sale[]> {
+    return [...mem.sales.values()]
+      .sort((a, b) => (a.created_at < b.created_at ? 1 : -1))
+      .slice(0, limit)
+      .map((s) => ({ ...s }));
+  }
+
+  async lotsForSales(saleIds: string[]): Promise<Lot[]> {
+    const wanted = new Set(saleIds);
+    return [...mem.lots.values()]
+      .filter((l) => l.sale_id !== null && wanted.has(l.sale_id))
+      .sort((a, b) => a.sort_order - b.sort_order)
+      .map((l) => ({ ...l }));
+  }
+
+  async soldLots(limit: number): Promise<Lot[]> {
+    return [...mem.lots.values()]
+      .filter((l) => l.status === 'sold')
+      .sort((a, b) => (a.created_at < b.created_at ? 1 : -1))
+      .slice(0, limit)
+      .map((l) => ({ ...l }));
   }
 }
 
