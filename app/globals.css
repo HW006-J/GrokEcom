@@ -107,6 +107,14 @@ button { font: inherit; color: inherit; border: 0; background: none; cursor: poi
   padding: 0; will-change: transform;
   transition: filter .2s ease;
 }
+/* The cloud settles once and stays put, so the only motion is arriving. */
+.obj > img { animation: settle .55s cubic-bezier(.2,.9,.3,1) both; }
+.obj:nth-child(2) > img { animation-delay: .06s; }
+.obj:nth-child(3) > img { animation-delay: .12s; }
+.obj:nth-child(4) > img { animation-delay: .18s; }
+.obj:nth-child(5) > img { animation-delay: .24s; }
+.obj:nth-child(6) > img { animation-delay: .30s; }
+@keyframes settle { from { opacity: 0; transform: scale(.88); } to { opacity: 1; transform: none; } }
 .obj img {
   width: 100%; height: 100%; object-fit: contain;
   mix-blend-mode: multiply; pointer-events: none; -webkit-user-drag: none;

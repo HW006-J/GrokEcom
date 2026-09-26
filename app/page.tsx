@@ -2,21 +2,13 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { MOCK_OBJECTS, lotToObject, type ScannedObject } from "@/lib/mock";
-import { saveObjects } from "@/lib/store";
+import { lotToObject, type ScannedObject } from "@/lib/mock";
+import { loadName, saveFrame, saveName, saveObjects } from "@/lib/store";
 import type { ScanResponse } from "@/lib/types";
 import { X, Flash, Flip, ChevronUp, Scan } from "@/components/icons";
 
 const SAMPLE_ROOM =
   "https://images.unsplash.com/photo-1586023492125-27b2c045efd7?w=1200&q=80";
-
-// Where the dots land if we never hear back and fall through to the sample set.
-const FALLBACK_SPOTS = [
-  { x: 0.29, y: 0.34 },
-  { x: 0.74, y: 0.29 },
-  { x: 0.55, y: 0.57 },
-  { x: 0.21, y: 0.72 },
-];
 
 type Phase = "live" | "scanning" | "revealing" | "found";
 type Spot = { x: number; y: number };
@@ -27,6 +19,8 @@ export default function ScanScreen() {
   const streamRef = useRef<MediaStream | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const [stillUrl, setStillUrl] = useState<string | null>(null);
+  const [name, setName] = useState<string | null>(null);
+  const [draftName, setDraftName] = useState("");
   const [cameraOn, setCameraOn] = useState(false);
   const [phase, setPhase] = useState<Phase>("live");
   const [dots, setDots] = useState(0);
@@ -60,6 +54,8 @@ export default function ScanScreen() {
       pending.finally(() => streamRef.current?.getTracks().forEach((t) => t.stop()));
     };
   }, [facing, start]);
+
+  useEffect(() => { setName(loadName()); }, []);
 
   // Reveal the dots one at a time once the scan comes back.
   useEffect(() => {
@@ -97,8 +93,13 @@ export default function ScanScreen() {
     setPhase("scanning");
 
     const form = new FormData();
-    if (source instanceof Blob) form.append("frame", source, "room.jpg");
-    else form.append("sampleUrl", source.sampleUrl);
+    if (source instanceof Blob) {
+      form.append("frame", source, "room.jpg");
+      saveFrame(source);
+    } else {
+      form.append("sampleUrl", source.sampleUrl);
+      saveFrame(source.sampleUrl);
+    }
 
     try {
       const res = await fetch("/api/scan", { method: "POST", body: form });
@@ -121,11 +122,8 @@ export default function ScanScreen() {
       );
       setPhase("revealing");
     } catch {
-      // Never dead-end the demo: show the sample set and say so quietly.
-      setObjects(MOCK_OBJECTS);
-      setSpots(FALLBACK_SPOTS);
-      setNote("Could not reach the scanner. Showing a sample room.");
-      setPhase("revealing");
+      setNote("The scan did not come back. Check the connection and try again.");
+      setPhase("live");
     }
   };
 
@@ -152,8 +150,9 @@ export default function ScanScreen() {
   };
 
   const review = () => {
-    saveObjects(objects.length ? objects : MOCK_OBJECTS);
-    router.push("/objects");
+    if (objects.length === 0) return;
+    saveObjects(objects);
+    router.push("/review");
   };
 
   const frozen = phase !== "live";
@@ -260,6 +259,50 @@ export default function ScanScreen() {
           </button>
         </div>
       </div>
+
+      {name === null && (
+        <div
+          style={{
+            position: "absolute", inset: 0, zIndex: 30,
+            background: "rgba(0,0,0,.45)", backdropFilter: "blur(6px)",
+            display: "flex", alignItems: "flex-end",
+          }}
+        >
+          <form
+            onSubmit={(e) => {
+              e.preventDefault();
+              const v = draftName.trim();
+              if (!v) return;
+              saveName(v);
+              setName(v);
+            }}
+            className="fade-in safe-b"
+            style={{ width: "100%", background: "#fff", borderRadius: "26px 26px 0 0", padding: "24px 22px 14px" }}
+          >
+            <h2 className="title">First, who are you?</h2>
+            <p className="sub" style={{ marginTop: 6 }}>
+              Your name goes on the sale, and it is the name you bid under.
+            </p>
+            <input
+              autoFocus
+              value={draftName}
+              onChange={(e) => setDraftName(e.target.value)}
+              placeholder="Your name"
+              maxLength={24}
+              enterKeyHint="go"
+              style={{
+                width: "100%", marginTop: 18, padding: "14px 16px",
+                borderRadius: 999, border: "1.5px solid var(--line-2)",
+                fontSize: 16, fontFamily: "inherit", color: "var(--ink)", background: "#fff",
+                outlineColor: "var(--accent)",
+              }}
+            />
+            <button className="pill pill--primary" type="submit" style={{ width: "100%", marginTop: 12 }} disabled={!draftName.trim()}>
+              Start scanning
+            </button>
+          </form>
+        </div>
+      )}
 
       <style>{`@keyframes sweep { 0%{transform:translateY(-100%)} 100%{transform:translateY(100%)} }`}</style>
     </main>
