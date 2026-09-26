@@ -1,12 +1,12 @@
 "use client";
 
-import { use, useCallback, useEffect, useMemo, useState } from "react";
+import { use, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { loadName, saveName } from "@/lib/store";
 import { supabaseBrowser } from "@/lib/supabase";
 import { gbp, type Lot, type Sale, type SaleBid, type SaleMessage, type SaleStateResponse } from "@/lib/types";
 import { Users, Clock, Check, Chevron } from "@/components/icons";
 
 const ROUND = 30;
-const NAME_KEY = "sellout.name";
 // Polling is the primary path: the sale runs with or without a database, so we
 // never assume Realtime is there. A second is fast enough to feel live.
 const POLL_MS = 1200;
@@ -28,11 +28,17 @@ export default function JoinPage({ params }: { params: Promise<{ code: string }>
   const [text, setText] = useState("");
   const [pending, setPending] = useState(false);
 
-  useEffect(() => {
-    try { setName(localStorage.getItem(NAME_KEY)); } catch {}
-  }, []);
+  // The scan already asked who you are; reuse it rather than asking twice.
+  useEffect(() => { setName(loadName()); }, []);
 
-  /* ── State: fetch, then Realtime, with polling as a safety net ── */
+  const join = (raw: string) => {
+    const n = raw.trim().slice(0, 24);
+    if (!n) return;
+    saveName(n);
+    setName(n);
+  };
+
+  /* ── State: poll first, Realtime as an enhancement ───────── */
   const refresh = useCallback(async () => {
     const res = await fetch(`/api/sale/${room}`).catch(() => null);
     if (!res) return;
@@ -43,18 +49,11 @@ export default function JoinPage({ params }: { params: Promise<{ code: string }>
 
   useEffect(() => { refresh(); }, [refresh]);
 
-  // Poll while the tab is in front; pause when it is hidden so a phone in a
-  // pocket is not hammering the server, and catch up the moment it comes back.
   useEffect(() => {
     let timer: ReturnType<typeof setInterval> | null = null;
-
     const stop = () => { if (timer) { clearInterval(timer); timer = null; } };
     const start = () => { if (!timer) timer = setInterval(refresh, POLL_MS); };
-
-    const onVisibility = () => {
-      if (document.hidden) stop();
-      else { refresh(); start(); }
-    };
+    const onVisibility = () => { if (document.hidden) stop(); else { refresh(); start(); } };
 
     if (!document.hidden) start();
     document.addEventListener("visibilitychange", onVisibility);
@@ -71,7 +70,6 @@ export default function JoinPage({ params }: { params: Promise<{ code: string }>
     return () => clearInterval(t);
   }, []);
 
-  // Realtime is an enhancement on top of the poll, only when Supabase exists.
   const saleId = state?.sale.id;
   useEffect(() => {
     if (!HAS_REALTIME || !saleId || !name) return;
@@ -79,7 +77,7 @@ export default function JoinPage({ params }: { params: Promise<{ code: string }>
     try {
       const db = supabaseBrowser();
       channel = db
-        .channel(`sale:${room}`, { config: { presence: { key: `${name}-${Math.random().toString(36).slice(2, 6)}` } } })
+        .channel(`sale:${room}`, { config: { presence: { key: `${name}-${crypto.randomUUID().slice(0, 6)}` } } })
         .on("postgres_changes", { event: "UPDATE", schema: "public", table: "sales", filter: `id=eq.${saleId}` },
           (p) => setState((s) => (s ? { ...s, sale: p.new as Sale } : s)))
         .on("postgres_changes", { event: "INSERT", schema: "public", table: "sale_bids", filter: `sale_id=eq.${saleId}` },
@@ -101,6 +99,7 @@ export default function JoinPage({ params }: { params: Promise<{ code: string }>
   /* ── Derived ─────────────────────────────────────────────── */
   const sale = state?.sale ?? null;
   const lot = state?.lot ?? null;
+  const lots = state?.lots ?? [];
 
   const opening = useMemo(() => {
     if (!lot) return 0;
@@ -112,10 +111,29 @@ export default function JoinPage({ params }: { params: Promise<{ code: string }>
   const left = sale?.lot_ends_at ? Math.max(0, Math.round((new Date(sale.lot_ends_at).getTime() - now) / 1000)) : 0;
   const biddingOpen = sale?.phase === "bidding" && left > 0;
   const iLead = Boolean(name && sale?.high_bidder === name);
+  const settled = lot?.status === "sold" || lot?.status === "unsold";
   const iWon = Boolean(lot?.status === "sold" && name && lot.sold_to === name);
+  const ended = sale?.phase === "ended";
 
-  // Without Realtime presence there is no true headcount, so count the people
-  // who have actually done something in this sale, plus you.
+  const raised = useMemo(
+    () => lots.reduce((s, l) => s + (l.status === "sold" ? Number(l.sold_for ?? 0) : 0), 0),
+    [lots]
+  );
+
+  // Being outbid has to be unmissable, so say so the moment it happens.
+  const wasLeading = useRef(false);
+  useEffect(() => {
+    if (!name) return;
+    if (iLead) { wasLeading.current = true; return; }
+    if (wasLeading.current && sale?.phase === "bidding" && sale.high_bidder) {
+      wasLeading.current = false;
+      setToast(`${sale.high_bidder} outbid you at ${gbp(Number(sale.high_bid ?? 0))}`);
+      setTimeout(() => setToast(null), 2400);
+    }
+  }, [iLead, name, sale?.phase, sale?.high_bidder, sale?.high_bid]);
+
+  // No Realtime presence means no true headcount, so count the people who have
+  // actually done something here, plus you. Never an invented number.
   const inTheRoom = useMemo(() => {
     if (HAS_REALTIME) return watchers;
     if (!state) return 1;
@@ -177,10 +195,10 @@ export default function JoinPage({ params }: { params: Promise<{ code: string }>
           <input
             value={draftName}
             onChange={(e) => setDraftName(e.target.value)}
-            onKeyDown={(e) => { if (e.key === "Enter" && draftName.trim()) { const n = draftName.trim().slice(0, 20); localStorage.setItem(NAME_KEY, n); setName(n); } }}
+            onKeyDown={(e) => { if (e.key === "Enter") join(draftName); }}
             placeholder="Your name"
             autoFocus
-            maxLength={20}
+            maxLength={24}
             style={{
               width: "100%", marginTop: 26, padding: "16px 18px",
               border: "1px solid var(--line-2)", borderRadius: 999,
@@ -191,7 +209,7 @@ export default function JoinPage({ params }: { params: Promise<{ code: string }>
             className="pill pill--primary"
             style={{ width: "100%", marginTop: 12 }}
             disabled={!draftName.trim()}
-            onClick={() => { const n = draftName.trim().slice(0, 20); localStorage.setItem(NAME_KEY, n); setName(n); }}
+            onClick={() => join(draftName)}
           >
             Join the sale <Chevron size={17} />
           </button>
@@ -212,11 +230,11 @@ export default function JoinPage({ params }: { params: Promise<{ code: string }>
   }
 
   /* ── The room ────────────────────────────────────────────── */
-  const pct = ((ROUND - left) / ROUND) * 100;
+  const pct = settled ? 100 : ((ROUND - left) / ROUND) * 100;
   const mmss = `${String(Math.floor(left / 60)).padStart(2, "0")}:${String(left % 60).padStart(2, "0")}`;
   const status =
     !sale ? "Joining…"
-    : sale.phase === "idle" ? "The sale is about to start"
+    : sale.phase === "idle" ? "About to start"
     : sale.phase === "presenting" ? "Up next"
     : sale.phase === "bidding" ? "On the block"
     : sale.phase === "sold" ? "Hammer down"
@@ -235,16 +253,9 @@ export default function JoinPage({ params }: { params: Promise<{ code: string }>
       <div style={{ flex: 1, minHeight: 0, display: "grid", placeItems: "center", padding: "6px 22px 0" }}>
         {lot?.image_url ? (
           /* eslint-disable-next-line @next/next/no-img-element */
-          <img
-            src={lot.image_url}
-            alt={lot.name}
-            style={{ maxWidth: "78%", maxHeight: "100%", objectFit: "contain", mixBlendMode: "multiply" }}
-          />
+          <img src={lot.image_url} alt={lot.name} style={{ maxWidth: "78%", maxHeight: "100%", objectFit: "contain" }} />
         ) : (
-          <div
-            aria-hidden
-            style={{ width: "70%", aspectRatio: "1", borderRadius: 24, background: "#f4f4f2" }}
-          />
+          <div aria-hidden style={{ width: "70%", aspectRatio: "1", borderRadius: 24, background: "#f4f4f2" }} />
         )}
       </div>
 
@@ -254,12 +265,20 @@ export default function JoinPage({ params }: { params: Promise<{ code: string }>
 
         <div style={{ display: "flex", alignItems: "flex-end", justifyContent: "space-between", marginTop: 12 }}>
           <div>
-            <p className="meta" style={{ margin: 0 }}>{lot?.status === "sold" ? "Sold for" : high === null ? "Opening bid" : "Current bid"}</p>
-            <p className="numeral" style={{ margin: "2px 0 0" }}>{gbp(shown)}</p>
-            {sale?.high_bidder && (
-              <p className="sub" style={{ marginTop: 2, color: iLead ? "var(--accent)" : undefined }}>
-                {lot?.status === "sold" ? `${sale.high_bidder} wins` : iLead ? "You're leading" : `${sale.high_bidder} leads`}
+            <p className="meta" style={{ margin: 0 }}>
+              {lot?.status === "sold" ? "Sold for" : high === null ? "Opening at" : "Winning bid"}
+            </p>
+            <p className="numeral" style={{ margin: "2px 0 0", color: iLead && !settled ? "var(--accent)" : undefined }}>
+              {gbp(shown)}
+            </p>
+            {sale?.high_bidder ? (
+              <p className="sub" style={{ marginTop: 2, color: iLead ? "var(--accent)" : undefined, fontWeight: iLead ? 600 : undefined }}>
+                {settled
+                  ? `${sale.high_bidder} wins`
+                  : iLead ? "You are winning" : `${sale.high_bidder} is winning`}
               </p>
+            ) : (
+              <p className="sub" style={{ marginTop: 2 }}>No bids yet</p>
             )}
           </div>
           <span style={{ display: "inline-flex", alignItems: "center", gap: 5, color: "var(--ink-2)", fontSize: 13, fontVariantNumeric: "tabular-nums", paddingBottom: 6 }}>
@@ -268,17 +287,17 @@ export default function JoinPage({ params }: { params: Promise<{ code: string }>
         </div>
 
         <div className="bar-track" style={{ marginTop: 12 }}>
-          <div className="bar-fill" style={{ width: `${lot?.status === "sold" ? 100 : pct}%` }} />
+          <div className="bar-fill" style={{ width: `${pct}%` }} />
         </div>
 
         {/* Result or bidding */}
-        {lot?.status === "sold" ? (
+        {settled ? (
           iWon ? (
             <div style={{ marginTop: 14, padding: 16, borderRadius: 20, background: "#f2f7ff", border: "1px solid rgba(10,108,255,.22)" }}>
               <p style={{ margin: 0, display: "inline-flex", alignItems: "center", gap: 7, color: "var(--accent)", fontWeight: 600 }}>
-                <Check size={16} /> You won it for {gbp(Number(lot.sold_for ?? shown))}
+                <Check size={16} /> You won it for {gbp(Number(lot?.sold_for ?? shown))}
               </p>
-              {lot.checkout_url ? (
+              {lot?.checkout_url ? (
                 <a className="pill pill--primary" style={{ width: "100%", marginTop: 12, textDecoration: "none" }} href={lot.checkout_url} target="_blank" rel="noreferrer">
                   Pay now
                 </a>
@@ -288,7 +307,7 @@ export default function JoinPage({ params }: { params: Promise<{ code: string }>
             </div>
           ) : (
             <p className="sub" style={{ marginTop: 14, textAlign: "center" }}>
-              {lot.sold_to ? `Sold to ${lot.sold_to}. Next lot coming up.` : "No bids on that one. Next lot coming up."}
+              {lot?.sold_to ? `Sold to ${lot.sold_to}. Next lot coming up.` : "No bids on that one. Next lot coming up."}
             </p>
           )
         ) : (
@@ -306,7 +325,7 @@ export default function JoinPage({ params }: { params: Promise<{ code: string }>
         <div style={{ marginTop: 12, minHeight: 46, maxHeight: 76, overflow: "hidden", display: "flex", flexDirection: "column", justifyContent: "flex-end", gap: 2 }}>
           {feed.map((f) => (
             <p key={f.id} className="fade-in" style={{ margin: 0, fontSize: 12.5, color: "var(--ink-2)", lineHeight: 1.45, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
-              <span style={{ color: "var(--ink)", fontWeight: 500 }}>{f.who}</span>{" "}
+              <span style={{ color: "var(--ink)", fontWeight: 500 }}>{f.who === name ? "You" : f.who}</span>{" "}
               {f.kind === "bid" ? `bid ${f.what}` : f.what}
             </p>
           ))}
@@ -328,6 +347,12 @@ export default function JoinPage({ params }: { params: Promise<{ code: string }>
         </div>
       </section>
 
+      {/* Hammer down, on everyone's phone */}
+      {settled && lot && !ended && <WinnerFlash lot={lot} me={name} />}
+
+      {/* The close */}
+      {ended && <SaleSummary lots={lots} raised={raised} me={name} />}
+
       {toast && (
         <div
           className="fade-in"
@@ -341,5 +366,87 @@ export default function JoinPage({ params }: { params: Promise<{ code: string }>
         </div>
       )}
     </main>
+  );
+}
+
+/* ── Hammer down ────────────────────────────────────────────── */
+function WinnerFlash({ lot, me }: { lot: Lot; me: string | null }) {
+  const [gone, setGone] = useState(false);
+  useEffect(() => { setGone(false); const t = setTimeout(() => setGone(true), 4600); return () => clearTimeout(t); }, [lot.id]);
+  if (gone) return null;
+
+  const sold = lot.status === "sold" && lot.sold_to;
+  const mine = Boolean(sold && me && lot.sold_to === me);
+
+  return (
+    <div className="fade-in" style={{ position: "absolute", inset: 0, zIndex: 28, background: "rgba(255,255,255,.96)", display: "grid", placeItems: "center", padding: 28 }}>
+      <div style={{ textAlign: "center", width: "100%" }}>
+        {lot.image_url && (
+          /* eslint-disable-next-line @next/next/no-img-element */
+          <img src={lot.image_url} alt={lot.name} style={{ maxWidth: "66%", maxHeight: "38svh", objectFit: "contain", filter: "drop-shadow(0 18px 22px rgba(0,0,0,.16))" }} />
+        )}
+        <p className="meta" style={{ marginTop: 20 }}>{sold ? "Sold" : "Unsold"}</p>
+        <p className="numeral" style={{ margin: "4px 0 0", color: mine ? "var(--accent)" : undefined }}>
+          {sold ? gbp(Number(lot.sold_for ?? 0)) : "—"}
+        </p>
+        <p className="title" style={{ marginTop: 10, color: mine ? "var(--accent)" : undefined }}>
+          {sold ? (mine ? "Yours" : `to ${lot.sold_to}`) : "No bids"}
+        </p>
+        <p className="sub" style={{ marginTop: 6 }}>{lot.name}</p>
+      </div>
+    </div>
+  );
+}
+
+/* ── The close ──────────────────────────────────────────────── */
+function SaleSummary({ lots, raised, me }: { lots: Lot[]; raised: number; me: string | null }) {
+  const mine = lots.filter((l) => l.status === "sold" && me && l.sold_to === me);
+  const spent = mine.reduce((s, l) => s + Number(l.sold_for ?? 0), 0);
+
+  return (
+    <div className="fade-in" style={{ position: "absolute", inset: 0, zIndex: 29, background: "#fff", display: "flex", flexDirection: "column" }}>
+      <header className="pad safe-t">
+        <p className="meta">That&apos;s the sale</p>
+        <h2 className="display" style={{ marginTop: 8 }}>
+          {mine.length ? `You won ${mine.length} ${mine.length === 1 ? "lot" : "lots"}` : "Nothing this time"}
+        </h2>
+        <p className="sub" style={{ marginTop: 6 }}>
+          {mine.length ? `${gbp(spent)} in total` : `${gbp(raised)} raised in the room`}
+        </p>
+      </header>
+
+      <div style={{ flex: 1, overflowY: "auto", padding: "14px 22px 4px" }}>
+        {lots.map((l) => {
+          const isMine = Boolean(l.status === "sold" && me && l.sold_to === me);
+          return (
+            <div key={l.id} style={{ display: "flex", alignItems: "center", gap: 14, padding: "12px 0", borderBottom: "1px solid var(--line)" }}>
+              <span style={{ width: 52, height: 52, borderRadius: 12, background: "#f6f6f4", overflow: "hidden", flex: "0 0 auto" }}>
+                {l.image_url && (
+                  /* eslint-disable-next-line @next/next/no-img-element */
+                  <img src={l.image_url} alt="" style={{ width: "100%", height: "100%", objectFit: "contain" }} />
+                )}
+              </span>
+              <span style={{ flex: 1, minWidth: 0 }}>
+                <span style={{ display: "block", fontSize: 15, fontWeight: 500, letterSpacing: "-.2px" }}>{l.name}</span>
+                <span className="meta" style={{ textTransform: "none", color: isMine ? "var(--accent)" : undefined }}>
+                  {l.status === "sold" ? (isMine ? "you won it" : `to ${l.sold_to}`) : "no bids"}
+                </span>
+              </span>
+              <span style={{ fontSize: 15, fontVariantNumeric: "tabular-nums", color: l.status === "sold" ? "var(--ink)" : "var(--ink-3)" }}>
+                {l.status === "sold" ? gbp(Number(l.sold_for ?? 0)) : "—"}
+              </span>
+            </div>
+          );
+        })}
+      </div>
+
+      {mine.some((l) => l.checkout_url) && (
+        <footer className="pad safe-b" style={{ paddingTop: 10 }}>
+          <a className="pill pill--primary" style={{ width: "100%", textDecoration: "none" }} href={mine.find((l) => l.checkout_url)?.checkout_url ?? "#"} target="_blank" rel="noreferrer">
+            Pay for what you won
+          </a>
+        </footer>
+      )}
+    </div>
   );
 }

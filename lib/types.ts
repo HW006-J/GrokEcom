@@ -98,7 +98,7 @@ export type MessageResponse = { ok: boolean };
 export type CloseLotResponse = { winner: string | null; amount: number | null; checkoutUrl: string | null };
 
 /** TRACK B — GET /api/sale/[code] → full state for the bidder page */
-export type SaleStateResponse = { sale: Sale; lot: Lot | null; bids: SaleBid[]; messages: SaleMessage[] };
+export type SaleStateResponse = { sale: Sale; lot: Lot | null; bids: SaleBid[]; messages: SaleMessage[]; lots?: Lot[] };
 
 /** Avatar session for the auctioneer. */
 export type SessionTokenResponse = { sessionToken: string };

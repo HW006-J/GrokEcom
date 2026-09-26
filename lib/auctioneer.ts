@@ -181,7 +181,7 @@ async function llmSay(c: Ctx): Promise<{ say: string; answeredMessageIds: string
 
 // ── The tick ────────────────────────────────────────────────
 
-export async function tick(code: string): Promise<TickResponse> {
+async function runTick(code: string): Promise<TickResponse> {
   const store = db();
   const sale0 = await findSale(code);
   if (!sale0) throw new Error('sale not found');
@@ -315,4 +315,18 @@ export async function tick(code: string): Promise<TickResponse> {
   next.lastTickAt = new Date(now).toISOString();
 
   return { say, action, answeredMessageIds };
+}
+
+// Two ticks landing together used to double-advance the phase and speak two
+// lines over each other, which is what made the auctioneer sound garbled.
+// One tick per sale at a time; a tick that arrives mid-flight is dropped
+// with an empty line so the caller stays quiet rather than talking twice.
+const inflight = new Map<string, Promise<TickResponse>>();
+
+export async function tick(code: string): Promise<TickResponse> {
+  const key = code.toUpperCase();
+  if (inflight.has(key)) return { say: '', action: 'none', answeredMessageIds: [] };
+  const run = runTick(key).finally(() => inflight.delete(key));
+  inflight.set(key, run);
+  return run;
 }
