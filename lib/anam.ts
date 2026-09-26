@@ -1,20 +1,25 @@
-// Anam session token in custom-LLM mode (we drive speech with talk(); Anam's brain is disabled).
+// Anam session token, minted server-side only. The key never reaches the browser.
+// Custom-LLM mode: Anam's own brain is off and we drive every line with talk().
+const API_BASE = process.env.ANAM_API_BASE ?? 'https://api.anam.ai';
+
 export async function createAnamSessionToken(): Promise<string> {
   const apiKey = process.env.ANAM_API_KEY;
   if (!apiKey) throw new Error('ANAM_API_KEY is not set');
-  const res = await fetch('https://api.anam.ai/v1/auth/session-token', {
+
+  const res = await fetch(`${API_BASE}/v1/auth/session-token`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
     body: JSON.stringify({
       personaConfig: {
-        name: 'Cara',
-        avatarId: process.env.ANAM_AVATAR_ID ?? '30fa96d0-26c4-4e55-94a0-517025942e18',
-        avatarModel: 'cara-4',
-        voiceId: process.env.ANAM_VOICE_ID ?? '6bfbe25a-979d-40f3-a92b-5394170af54b',
+        name: process.env.ANAM_PERSONA_NAME ?? 'Martin',
+        avatarId: process.env.ANAM_AVATAR_ID ?? '91e9e4d4-f0a2-49da-bad9-1d9bf77e62e7',
+        voiceId: process.env.ANAM_VOICE_ID ?? '91b4ce0f-4fc0-11f1-84b0-52bacf74fa75',
+        // Required whenever personaConfig is inline, or the token is rejected as legacy.
         llmId: 'CUSTOMER_CLIENT_V1',
       },
     }),
   });
+
   if (!res.ok) throw new Error(`Anam session token failed: ${res.status} ${await res.text()}`);
   const json = (await res.json()) as { sessionToken?: string };
   if (!json.sessionToken) throw new Error('Anam response had no sessionToken');

@@ -63,3 +63,49 @@ export async function structured<T>(opts: {
     throw e;
   }
 }
+
+
+/**
+ * Strict JSON, but the model may search the live web first.
+ * Uses the Responses API because that is where the hosted web_search tool lives.
+ * Never used on a hot path without a timeout: searching costs seconds, not milliseconds.
+ */
+export async function searchStructured<T>(opts: {
+  system: string;
+  input: string;
+  schema: Record<string, unknown>;
+  name: string;
+  maxTokens?: number;
+  timeoutMs?: number;
+}): Promise<T> {
+  const run = async (model: string) => {
+    const res = await openai().responses.create(
+      {
+        model,
+        tools: [{ type: 'web_search' }],
+        instructions: opts.system,
+        input: opts.input,
+        reasoning: /^(gpt-5|o\d)/.test(model) ? { effort: 'low' } : undefined,
+        max_output_tokens: opts.maxTokens ?? 2000,
+        text: {
+          format: {
+            type: 'json_schema',
+            name: opts.name,
+            strict: true,
+            schema: { type: 'object', additionalProperties: false, ...opts.schema },
+          },
+        },
+      },
+      { timeout: opts.timeoutMs ?? 30_000 }
+    );
+    const text = res.output_text;
+    if (!text) throw new Error('OpenAI web search returned no content');
+    return JSON.parse(text) as T;
+  };
+  try {
+    return await run(MODEL);
+  } catch (e) {
+    if (MODEL !== FALLBACK_MODEL && isModelRejected(e)) return run(FALLBACK_MODEL);
+    throw e;
+  }
+}

@@ -25,6 +25,8 @@ export default function ScanScreen() {
   const router = useRouter();
   const videoRef = useRef<HTMLVideoElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
+  const fileRef = useRef<HTMLInputElement>(null);
+  const [stillUrl, setStillUrl] = useState<string | null>(null);
   const [cameraOn, setCameraOn] = useState(false);
   const [phase, setPhase] = useState<Phase>("live");
   const [dots, setDots] = useState(0);
@@ -87,17 +89,16 @@ export default function ScanScreen() {
     return new Promise((resolve) => canvas.toBlob((b) => resolve(b), "image/jpeg", 0.85));
   };
 
-  const capture = async () => {
-    if (phase !== "live") return;
+  /** Send a frame to the scanner and drive the reveal. */
+  const runScan = async (source: Blob | { sampleUrl: string }) => {
     setDots(0);
     setSpots([]);
     setNote(null);
     setPhase("scanning");
 
     const form = new FormData();
-    const blob = await grabFrame();
-    if (blob) form.append("frame", blob, "room.jpg");
-    else form.append("sampleUrl", SAMPLE_ROOM); // no camera: the server reads the demo room
+    if (source instanceof Blob) form.append("frame", source, "room.jpg");
+    else form.append("sampleUrl", source.sampleUrl);
 
     try {
       const res = await fetch("/api/scan", { method: "POST", body: form });
@@ -128,6 +129,28 @@ export default function ScanScreen() {
     }
   };
 
+  /**
+   * With a live camera, grab the current frame. Without one, and that includes
+   * every phone on a plain http address, open the native camera instead so the
+   * scan still runs on the room the person is actually standing in.
+   */
+  const capture = async () => {
+    if (phase !== "live") return;
+    if (cameraOn) {
+      const blob = await grabFrame();
+      if (blob) return runScan(blob);
+    }
+    fileRef.current?.click();
+  };
+
+  const onPickPhoto = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (!file) return;
+    setStillUrl(URL.createObjectURL(file));
+    runScan(file);
+  };
+
   const review = () => {
     saveObjects(objects.length ? objects : MOCK_OBJECTS);
     router.push("/objects");
@@ -150,8 +173,8 @@ export default function ScanScreen() {
           /* eslint-disable-next-line @next/next/no-img-element */
           <img
             className="cam-still"
-            src={SAMPLE_ROOM}
-            alt="Sample room"
+            src={stillUrl ?? SAMPLE_ROOM}
+            alt={stillUrl ? "Your room" : "Sample room"}
             style={{ filter: frozen ? "brightness(.92)" : undefined, transition: "filter .3s ease" }}
           />
         )}
@@ -202,6 +225,15 @@ export default function ScanScreen() {
             </span>
           )}
         </div>
+
+        <input
+          ref={fileRef}
+          type="file"
+          accept="image/*"
+          capture="environment"
+          onChange={onPickPhoto}
+          style={{ display: "none" }}
+        />
 
         {/* camera bar */}
         <div className="cam-bar">

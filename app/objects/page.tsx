@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import { MOCK_OBJECTS, gbp, lotToObject, type ScannedObject } from "@/lib/mock";
 import { loadObjects, saveObjects } from "@/lib/store";
 import { supabaseBrowser } from "@/lib/supabase";
-import type { Lot } from "@/lib/types";
+import type { Comp, Lot } from "@/lib/types";
 import { Grid, List, Scan, Chevron, Check } from "@/components/icons";
 
 // Lots from a real scan carry a uuid; the sample set does not.
@@ -18,6 +18,8 @@ export default function ObjectsScreen() {
   const [objects, setObjects] = useState<ScannedObject[]>(MOCK_OBJECTS);
   const [view, setView] = useState<"cloud" | "list">("cloud");
   const [focus, setFocus] = useState(0);
+  const [pricing, setPricing] = useState<string[]>([]);
+  const refined = useRef<Set<string>>(new Set());
 
   // Whatever the last scan produced, else the most recent lots, else the sample set.
   useEffect(() => {
@@ -49,6 +51,39 @@ export default function ObjectsScreen() {
     return () => { alive = false; };
   }, []);
 
+
+  // The scan hands us a quick estimate. Now check what these actually sell for,
+  // one live web search per object, and let the prices settle in place.
+  useEffect(() => {
+    const todo = objects.filter((o) => !refined.current.has(o.id) && !(o.comps && o.comps.length));
+    if (todo.length === 0) return;
+    todo.forEach((o) => refined.current.add(o.id));
+    setPricing((p) => [...p, ...todo.map((o) => o.id)]);
+
+    todo.forEach(async (o) => {
+      try {
+        const res = await fetch("/api/price", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ name: o.name, category: o.category, condition: o.condition }),
+        });
+        if (!res.ok) throw new Error(String(res.status));
+        const est = (await res.json()) as { low: number; high: number; reserve: number; comps: Comp[] };
+        setObjects((prev) => {
+          const next = prev.map((x) =>
+            x.id === o.id ? { ...x, low: est.low, high: est.high, reserve: est.reserve, comps: est.comps } : x
+          );
+          saveObjects(next);
+          return next;
+        });
+      } catch {
+        // keep the quick estimate rather than showing nothing
+      } finally {
+        setPricing((p) => p.filter((id) => id !== o.id));
+      }
+    });
+  }, [objects]);
+
   const picked = objects.filter((o) => o.picked);
 
   const toggle = (id: string) => {
@@ -76,7 +111,9 @@ export default function ObjectsScreen() {
         <div>
           <h1 className="display">Your objects</h1>
           <p className="sub" style={{ marginTop: 6 }}>
-            {objects.length} objects · {gbp(picked.reduce((s, o) => s + o.low, 0))}–{gbp(picked.reduce((s, o) => s + o.high, 0))}
+            {pricing.length > 0
+              ? `${objects.length} objects · checking live prices…`
+              : `${objects.length} objects · ${gbp(picked.reduce((s, o) => s + o.low, 0))}–${gbp(picked.reduce((s, o) => s + o.high, 0))}`}
           </p>
         </div>
         <div className="seg" role="tablist" aria-label="View">

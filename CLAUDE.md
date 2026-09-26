@@ -18,3 +18,20 @@ Three screens, in order: **Scan** at `/`, **Your objects** at `/objects`, **Auct
 - **Next 16.** Read `node_modules/next/dist/docs/` before writing routes or pages. `params` and `searchParams` are Promises.
 - Money is GBP and always a number, never a string. Prior ClosetLive routes worth lifting logic from are at commit `46fef3a`.
 
+
+## Anam rules
+
+ALWAYS:
+- Mint session tokens on the server; only the short-lived token reaches the browser. Tokens last about an hour.
+- Prepare on page load: bundle the SDK and prefetch the token. The user gesture should only call `streamToVideoElement()`.
+- Add `<link rel="preconnect" href="https://api.anam.ai">` to warm the connection.
+- Keep spoken replies short and conversational.
+- Set `llmId: 'CUSTOMER_CLIENT_V1'` whenever `personaConfig` is inline, or the token is rejected as legacy. Our own code produces every line.
+- Stream long replies with `createTalkMessageStream()` and end with `endMessage()`; on `TALK_STREAM_INTERRUPTED`, discard buffers and start a fresh stream.
+- Keep the system prompt in our code. In custom-LLM mode it is never sent to Anam.
+- Inside an iframe, set `allow="camera; microphone; autoplay"` or the stream stalls silently.
+
+NEVER:
+- Expose `ANAM_API_KEY` to the client, or import it into anything under `app/` that runs in the browser.
+- Play our own TTS alongside Anam. Anam speaks the text we send.
+- Invent an Anam API, method or config field. Check https://anam.ai/docs/llms.txt or ask.

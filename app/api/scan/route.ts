@@ -3,7 +3,7 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import { ok, fail } from '@/lib/api';
 import { supabaseServer } from '@/lib/supabase';
 import { detectObjects, cropCutout, MAX_OBJECTS, type Detection } from '@/lib/vision';
-import { priceObject, type Estimate } from '@/lib/pricing';
+import { priceObjectFast, type Estimate } from '@/lib/pricing';
 import type { Lot, ScanResponse } from '@/lib/types';
 
 export const runtime = 'nodejs'; // sharp
@@ -65,7 +65,7 @@ export async function POST(req: NextRequest) {
     // Cut out and price every object at once; a slow comp search must not hold up the rest.
     const built = await Promise.all(
       detections.map(async (d, i): Promise<{ d: Detection; image: string; est: Estimate }> => {
-        const [image, est] = await Promise.all([cutout(client, frame, d, stamp, i), priceObject(d)]);
+        const [image, est] = await Promise.all([cutout(client, frame, d, stamp, i), priceObjectFast(d)]);
         return { d, image, est };
       })
     );
