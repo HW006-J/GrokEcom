@@ -1,19 +1,12 @@
--- Demo show + 3 items. Fixed show id so the UI can hard-code it.
-insert into shows (id, title, phase) values
-  ('00000000-0000-0000-0000-000000000001', 'Luka''s Wardrobe Clear-out', 'idle')
+-- One demo sale with five lots, matching lib/mock.ts so the UI has real rows to read.
+insert into sales (id, code, title, phase) values
+  ('00000000-0000-0000-0000-0000000000a1', 'DEMO', 'Luka''s front room', 'idle')
 on conflict (id) do nothing;
 
-insert into items (id, show_id, title, brand, size, condition, description, price_estimate, buy_now_price, image_urls, sort_order) values
-  ('00000000-0000-0000-0000-000000000011', '00000000-0000-0000-0000-000000000001',
-   'Carhartt WIP Detroit Jacket', 'Carhartt WIP', 'M', '4/5 - light fade, no damage',
-   'Classic Detroit jacket in hamilton brown duck canvas, blanket lined. Runs slightly large.',
-   85, 95, array['https://images.unsplash.com/photo-1551028719-00167b16eac5?w=800'], 1),
-  ('00000000-0000-0000-0000-000000000012', '00000000-0000-0000-0000-000000000001',
-   'Nike Vintage Windbreaker', 'Nike', 'L', '3/5 - small mark on left sleeve',
-   '90s colour-block windbreaker, half zip, packable hood. Boxy 90s fit.',
-   40, 45, array['https://images.unsplash.com/photo-1591047139829-d91aecb6caea?w=800'], 2),
-  ('00000000-0000-0000-0000-000000000013', '00000000-0000-0000-0000-000000000001',
-   'Levi''s 501 Original Jeans', 'Levi''s', 'W32 L32', '5/5 - worn twice',
-   'Straight fit, mid-stone wash, button fly. True to size.',
-   35, 40, array['https://images.unsplash.com/photo-1542272604-787c3835535d?w=800'], 3)
+insert into lots (id, sale_id, name, category, condition, blurb, image_url, low, high, reserve, picked, sort_order) values
+  ('00000000-0000-0000-0000-0000000000b1','00000000-0000-0000-0000-0000000000a1','Ceramic table lamp','Lighting','Very good','Fluted ceramic base with a pleated linen shade. Warm, soft light.','https://images.unsplash.com/photo-1507473885765-e6ed057f782c?w=700&q=80',65,90,45,true,1),
+  ('00000000-0000-0000-0000-0000000000b2','00000000-0000-0000-0000-0000000000a1','35mm rangefinder camera','Tech','Good, light brassing','Fully mechanical rangefinder with a fast 40mm lens. Shutter accurate.','https://images.unsplash.com/photo-1495121605193-b116b5b9c5fe?w=700&q=80',120,180,84,true,2),
+  ('00000000-0000-0000-0000-0000000000b3','00000000-0000-0000-0000-0000000000a1','Mid-century lounge chair','Furniture','Very good','Solid walnut frame, olive wool cushions. No wobble, no marks.','https://images.unsplash.com/photo-1567538096630-e0c55bd6374c?w=700&q=80',180,260,126,true,3),
+  ('00000000-0000-0000-0000-0000000000b4','00000000-0000-0000-0000-0000000000a1','Waxed field jacket','Clothing','Good','Olive waxed cotton, corduroy collar, size M. Ready to re-wax.','https://images.unsplash.com/photo-1591047139829-d91aecb6caea?w=700&q=80',55,85,38,true,4),
+  ('00000000-0000-0000-0000-0000000000b5','00000000-0000-0000-0000-0000000000a1','Suede running trainers','Footwear','Worn twice','UK 9, grey suede and mesh. Boxed with spare laces.','https://images.unsplash.com/photo-1539185441755-769473a23570?w=700&q=80',45,70,31,false,5)
 on conflict (id) do nothing;

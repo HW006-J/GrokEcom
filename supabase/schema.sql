@@ -1,85 +1,87 @@
--- ClosetLive schema. Run in Supabase SQL editor. Idempotent.
+-- The Sellout — schema. Run in the Supabase SQL editor. Idempotent.
 create extension if not exists pgcrypto;
 
-create table if not exists shows (
+-- A live sale: an ordered queue of lots with one on the block at a time.
+create table if not exists sales (
   id uuid primary key default gen_random_uuid(),
-  title text not null,
-  phase text not null default 'idle', -- idle|intro|qa|auction|closed|ended
-  current_item_id uuid,
-  auction_ends_at timestamptz,
+  code text not null unique,                 -- short join code used in share links
+  title text not null default 'The Sellout',
+  phase text not null default 'idle',        -- idle|presenting|bidding|sold|ended
+  current_lot_id uuid,
+  lot_ends_at timestamptz,
   high_bid numeric,
-  high_bidder_name text,
+  high_bidder text,
+  watchers int not null default 0,
   created_at timestamptz not null default now()
 );
 
-create table if not exists items (
+-- Something found in a room scan. Becomes a lot when picked for a sale.
+create table if not exists lots (
   id uuid primary key default gen_random_uuid(),
-  show_id uuid not null references shows(id) on delete cascade,
-  title text not null,
-  brand text,
-  size text,
+  sale_id uuid references sales(id) on delete set null,
+  name text not null,
+  category text not null default 'Other',
   condition text,
-  description text,
-  price_estimate numeric,
-  buy_now_price numeric,
-  shopify_product_id text,
-  shopify_variant_id text,
-  image_urls text[] not null default '{}',
-  status text not null default 'listed', -- listed|live|sold|unsold
+  blurb text,
+  image_url text,                            -- cutout used in the cloud and the sale
+  source_image_url text,                     -- the room frame it came from
+  bbox jsonb,                                -- {x,y,w,h} relative to the frame
+  low numeric,
+  high numeric,
+  reserve numeric,
+  comps jsonb not null default '[]'::jsonb,  -- [{title,price,url,source}]
+  picked boolean not null default true,
+  status text not null default 'found',      -- found|queued|live|sold|unsold
   sold_to text,
-  invoice_url text,
+  sold_for numeric,
+  checkout_url text,
   sort_order int not null default 0,
   created_at timestamptz not null default now()
 );
 
-create table if not exists bids (
+create table if not exists sale_bids (
   id uuid primary key default gen_random_uuid(),
-  show_id uuid not null references shows(id) on delete cascade,
-  item_id uuid not null references items(id) on delete cascade,
-  bidder_name text not null,
+  sale_id uuid not null references sales(id) on delete cascade,
+  lot_id uuid not null references lots(id) on delete cascade,
+  bidder text not null,
   amount numeric not null,
   created_at timestamptz not null default now()
 );
 
-create table if not exists messages (
+create table if not exists sale_messages (
   id uuid primary key default gen_random_uuid(),
-  show_id uuid not null references shows(id) on delete cascade,
+  sale_id uuid not null references sales(id) on delete cascade,
   name text not null,
   text text not null,
   answered boolean not null default false,
   created_at timestamptz not null default now()
 );
 
--- Hackathon: open read access for anon (browser reads + realtime). Writes go through service role in /api.
-alter table shows enable row level security;
-alter table items enable row level security;
-alter table bids enable row level security;
-alter table messages enable row level security;
-drop policy if exists "anon read shows" on shows;
-drop policy if exists "anon read items" on items;
-drop policy if exists "anon read bids" on bids;
-drop policy if exists "anon read messages" on messages;
-create policy "anon read shows" on shows for select using (true);
-create policy "anon read items" on items for select using (true);
-create policy "anon read bids" on bids for select using (true);
-create policy "anon read messages" on messages for select using (true);
+create index if not exists lots_sale_order on lots (sale_id, sort_order);
+create index if not exists bids_lot_time on sale_bids (lot_id, created_at desc);
 
--- Realtime
-do $$ begin
-  alter publication supabase_realtime add table shows;
-exception when duplicate_object then null; end $$;
-do $$ begin
-  alter publication supabase_realtime add table bids;
-exception when duplicate_object then null; end $$;
-do $$ begin
-  alter publication supabase_realtime add table messages;
-exception when duplicate_object then null; end $$;
-do $$ begin
-  alter publication supabase_realtime add table items;
-exception when duplicate_object then null; end $$;
+-- Hackathon posture: anyone may read, writes go through the service role in /api.
+alter table sales enable row level security;
+alter table lots enable row level security;
+alter table sale_bids enable row level security;
+alter table sale_messages enable row level security;
+drop policy if exists "read sales" on sales;
+drop policy if exists "read lots" on lots;
+drop policy if exists "read bids" on sale_bids;
+drop policy if exists "read messages" on sale_messages;
+create policy "read sales" on sales for select using (true);
+create policy "read lots" on lots for select using (true);
+create policy "read bids" on sale_bids for select using (true);
+create policy "read messages" on sale_messages for select using (true);
 
--- Public storage bucket for photos
-insert into storage.buckets (id, name, public) values ('photos', 'photos', true)
+-- Realtime for the bidder page and the stage
+do $$ begin alter publication supabase_realtime add table sales; exception when duplicate_object then null; end $$;
+do $$ begin alter publication supabase_realtime add table lots; exception when duplicate_object then null; end $$;
+do $$ begin alter publication supabase_realtime add table sale_bids; exception when duplicate_object then null; end $$;
+do $$ begin alter publication supabase_realtime add table sale_messages; exception when duplicate_object then null; end $$;
+
+-- Public bucket for room frames and cutouts
+insert into storage.buckets (id, name, public) values ('scans', 'scans', true)
 on conflict (id) do nothing;
-drop policy if exists "public read photos" on storage.objects;
-create policy "public read photos" on storage.objects for select using (bucket_id = 'photos');
+drop policy if exists "public read scans" on storage.objects;
+create policy "public read scans" on storage.objects for select using (bucket_id = 'scans');
