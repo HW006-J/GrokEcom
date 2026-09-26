@@ -2,9 +2,14 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { MOCK_OBJECTS, gbp, type ScannedObject } from "@/lib/mock";
+import { MOCK_OBJECTS, gbp, lotToObject, type ScannedObject } from "@/lib/mock";
 import { loadObjects, saveObjects } from "@/lib/store";
+import { supabaseBrowser } from "@/lib/supabase";
+import type { Lot } from "@/lib/types";
 import { Grid, List, Scan, Chevron, Check } from "@/components/icons";
+
+// Lots from a real scan carry a uuid; the sample set does not.
+const IS_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 type Body = { x: number; y: number; r: number; phase: number; amp: number; speed: number };
 
@@ -14,19 +19,51 @@ export default function ObjectsScreen() {
   const [view, setView] = useState<"cloud" | "list">("cloud");
   const [focus, setFocus] = useState(0);
 
+  // Whatever the last scan produced, else the most recent lots, else the sample set.
   useEffect(() => {
-    const saved = loadObjects();
-    if (saved?.length) setObjects(saved);
+    let alive = true;
+
+    const hydrate = async (): Promise<ScannedObject[] | null> => {
+      const saved = loadObjects();
+      if (saved?.length) return saved;
+      try {
+        const { data } = await supabaseBrowser()
+          .from("lots")
+          .select("*")
+          .order("created_at", { ascending: false })
+          .order("sort_order", { ascending: true })
+          .limit(12);
+        if (data?.length) return (data as Lot[]).map(lotToObject);
+      } catch {
+        // no Supabase configured; the sample set already on screen is the fallback
+      }
+      return null;
+    };
+
+    hydrate().then((found) => {
+      if (!alive || !found) return;
+      setObjects(found);
+      saveObjects(found);
+    });
+
+    return () => { alive = false; };
   }, []);
 
   const picked = objects.filter((o) => o.picked);
 
-  const toggle = (id: string) =>
-    setObjects((prev) => {
-      const next = prev.map((o) => (o.id === id ? { ...o, picked: !o.picked } : o));
-      saveObjects(next);
-      return next;
-    });
+  const toggle = (id: string) => {
+    const picking = !(objects.find((o) => o.id === id)?.picked ?? false);
+    const next = objects.map((o) => (o.id === id ? { ...o, picked: picking } : o));
+    setObjects(next);
+    saveObjects(next);
+    if (IS_UUID.test(id)) {
+      fetch(`/api/lots/${id}/pick`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ picked: picking }),
+      }).catch(() => {}); // the screen has already moved on
+    }
+  };
 
   const review = () => {
     saveObjects(objects);
