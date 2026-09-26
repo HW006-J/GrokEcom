@@ -5,6 +5,9 @@ import type { BidResponse } from '@/lib/types';
 
 type Body = { bidder?: string; amount?: number };
 
+/** Bids are whole pounds, and nobody is bidding a trillion for a lamp. */
+const MAX_BID = 1_000_000;
+
 export async function POST(request: Request, { params }: { params: Promise<{ code: string }> }) {
   const { code } = await params;
   const body = (await request.json().catch(() => null)) as Body | null;
@@ -13,6 +16,8 @@ export async function POST(request: Request, { params }: { params: Promise<{ cod
   if (!bidder || !Number.isFinite(amount) || amount <= 0) {
     return fail('bidder and a positive amount are required');
   }
+  if (!Number.isInteger(amount)) return fail('bids are in whole pounds');
+  if (amount > MAX_BID) return fail(`the most you can bid is £${MAX_BID.toLocaleString('en-GB')}`);
 
   const store = db();
 

@@ -181,9 +181,9 @@ function Cloud({
 
       // Size the objects so they comfortably fill, never crowd, the space available.
       const weightSum = weights.reduce((s, x) => s + x * x, 0) || 1;
-      const targetArea = w * h * 0.30;
+      const targetArea = w * h * 0.42;
       const base = Math.sqrt(targetArea / (Math.PI * weightSum));
-      const cap = Math.min(w, h) * 0.26;
+      const cap = Math.min(w, h) * 0.32;
 
       // Start on a phyllotaxis spiral, which spreads evenly, then relax.
       bodies.current = objects.map((_, i) => {
@@ -212,7 +212,15 @@ function Cloud({
         node.style.transform = `translate(${b.x - b.r}px, ${b.y - b.r}px)`;
       });
       const f = bodies.current[focus];
-      if (f) setChip({ x: f.x, y: f.y - f.r - 18 });
+      if (f) {
+        const rect = el.getBoundingClientRect();
+        const above = f.y - f.r - 18;
+        const below = f.y + f.r + 18;
+        setChip({
+          x: Math.max(90, Math.min(rect.width - 90, f.x)),
+          y: above < 34 ? below : above,
+        });
+      }
     };
 
     const settle = () => { measure(); place(); };
