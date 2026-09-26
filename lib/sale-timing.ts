@@ -14,6 +14,7 @@ export const windowSeconds = (highBid: number | null | undefined) =>
   highBid === null || highBid === undefined ? OPEN_SECONDS : QUIET_SECONDS;
 
 // When the host scheduled the sale to begin. Mirrors the single-process sale storage lifetime.
-const starts = new Map<string, string>();
+const shared = globalThis as typeof globalThis & { selloutStarts?: Map<string, string> };
+const starts = shared.selloutStarts ??= new Map<string, string>();
 export const startsAt = (saleId: string) => starts.get(saleId) ?? null;
 export function setStartsAt(saleId: string, iso: string) { starts.set(saleId, iso); }

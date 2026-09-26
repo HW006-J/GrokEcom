@@ -2,7 +2,7 @@ import { startsAt } from "@/lib/sale-timing";
 import { waitingPreviews } from '@/lib/waiting-previews';
 import { ok, fail } from '@/lib/api';
 import { db } from '@/lib/db';
-import { closeLot } from '@/lib/auctioneer';
+import { closeLot, advanceStartClock } from '@/lib/auctioneer';
 import { findSale, saleLots } from '@/lib/sale';
 import type { SaleStateResponse } from '@/lib/types';
 
@@ -11,6 +11,11 @@ export async function GET(_request: Request, { params }: { params: Promise<{ cod
   try {
     let sale = await findSale(code);
     if (!sale) return fail('sale not found', 404);
+
+    if (sale.phase === 'idle' || sale.phase === 'presenting') {
+      await advanceStartClock(code);
+      sale = (await findSale(code)) ?? sale;
+    }
 
     // The hammer must not depend on the presenter's tab staying awake. If the
     // clock has run out, whoever reads the sale next settles it. closeLot takes

@@ -314,7 +314,7 @@ async function runTick(code: string): Promise<TickResponse> {
   // "Going once, going twice" has seconds to land; a model round trip would put it on top of the hammer.
   const lastCall = sale.phase === 'bidding' && !newBids.length && !questions.length
     && ctx.secondsLeft !== null && ctx.secondsLeft <= CALL_SECONDS + 1;
-  if (lastCall || process.env.MOCK_AUCTIONEER === '1' || !process.env.OPENAI_API_KEY) {
+  if (action !== 'none' || sale.phase === 'presenting' || lastCall || process.env.MOCK_AUCTIONEER === '1' || !process.env.OPENAI_API_KEY) {
     say = cannedSay(ctx);
     answeredMessageIds = ctx.questions.map((m) => m.id);
   } else {
@@ -346,9 +346,10 @@ async function runTick(code: string): Promise<TickResponse> {
 // a hammer could run at once and the auctioneer would invite bids on a lot that
 // had just sold. Both paths now queue on the same chain.
 
-const queue = new Map<string, Promise<unknown>>();
+const sharedLocks = globalThis as typeof globalThis & { selloutQueue?: Map<string, Promise<unknown>>; selloutWaiting?: Map<string, number> };
+const queue = sharedLocks.selloutQueue ??= new Map<string, Promise<unknown>>();
 /** Incremented synchronously on entry, so a racing caller sees it immediately. */
-const waiting = new Map<string, number>();
+const waiting = sharedLocks.selloutWaiting ??= new Map<string, number>();
 
 function withSaleLock<T>(key: string, fn: () => Promise<T>): Promise<T> {
   waiting.set(key, (waiting.get(key) ?? 0) + 1);
@@ -402,5 +403,31 @@ export async function endSale(code: string): Promise<void> {
       if (lot.status === 'queued' || lot.status === 'live') await store.updateLot(lot.id, {status:'unsold'});
     }
     await store.updateSale(sale.id, {phase:'ended',lot_ends_at:null});
+  });
+}
+
+/** Clock transitions also run on room reads, independent of the host's voice/tab. */
+export async function advanceStartClock(code: string): Promise<void> {
+  await withSaleLock(code.toUpperCase(), async () => {
+    const store = db();
+    let sale = await findSale(code);
+    if (!sale) return;
+    const now = Date.now();
+    const start = startsAt(sale.id);
+    if (sale.phase === 'idle' && start && Date.parse(start) <= now) {
+      const lot = (await saleLots(sale.id)).find(item => item.status === 'queued');
+      if (!lot) { await store.updateSale(sale.id, {phase:'ended'}); return; }
+      await store.updateLot(lot.id, {status:'live'});
+      sale = await store.updateSale(sale.id, {
+        phase:'presenting', current_lot_id:lot.id, high_bid:null, high_bidder:null,
+        lot_ends_at:new Date(Date.parse(start) + PRESENT_SECONDS * 1000).toISOString(),
+      }) ?? sale;
+    }
+    if (sale.phase === 'presenting' && sale.lot_ends_at && Date.parse(sale.lot_ends_at) <= now) {
+      await store.updateSale(sale.id, {
+        phase:'bidding', high_bid:null, high_bidder:null,
+        lot_ends_at:new Date(now + OPEN_SECONDS * 1000).toISOString(),
+      });
+    }
   });
 }
