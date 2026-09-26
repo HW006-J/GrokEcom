@@ -7,7 +7,8 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "vision:warmup": "node scripts/warmup-vision.mjs"
+    "vision:warmup": "node scripts/warmup-vision.mjs",
+    "agent:list": "node --disable-warning=ExperimentalWarning --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/browser-agent.mts"
   },
   "dependencies": {
     "@anam-ai/js-sdk": "^4.27.1",
