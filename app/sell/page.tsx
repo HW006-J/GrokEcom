@@ -30,7 +30,10 @@ export default function SellPage() {
     if (result.items) setItems(result.items);
     if (result.error) setError(result.error);
   }
-  useEffect(() => { void loadItems(); }, []);
+  useEffect(() => {
+    const id = setTimeout(() => { void loadItems(); }, 0);
+    return () => clearTimeout(id);
+  }, []);
 
   function pick(list: FileList | null) {
     if (!list) return;
