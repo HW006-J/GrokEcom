@@ -1,5 +1,7 @@
 // Shared helpers for the sale routes (Track B).
-import { supabaseServer } from '@/lib/supabase';
+// Persistence goes through db(), which is Supabase when configured and an
+// in-memory store otherwise, so the sale runs with or without a database.
+import { db } from '@/lib/db';
 import type { Lot, Sale } from '@/lib/types';
 
 // No O/0, I/1, S/5 — this gets read aloud and typed on a phone.
@@ -12,15 +14,11 @@ export function makeCode(len = 4): string {
 }
 
 export async function findSale(code: string): Promise<Sale | null> {
-  const db = supabaseServer();
-  const { data } = await db.from('sales').select('*').eq('code', code.toUpperCase()).maybeSingle<Sale>();
-  return data ?? null;
+  return db().findSaleByCode(code);
 }
 
 export async function saleLots(saleId: string): Promise<Lot[]> {
-  const db = supabaseServer();
-  const { data } = await db.from('lots').select('*').eq('sale_id', saleId).order('sort_order');
-  return (data ?? []) as Lot[];
+  return db().lotsForSale(saleId);
 }
 
 /** Bidding opens at the lot's reserve, or a little under the low estimate. */

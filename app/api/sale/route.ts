@@ -1,5 +1,5 @@
 import { ok, fail } from '@/lib/api';
-import { supabaseServer } from '@/lib/supabase';
+import { db, type NewLot as NewLotRow } from '@/lib/db';
 import { makeCode } from '@/lib/sale';
 import type { CreateSaleResponse, Lot, Sale } from '@/lib/types';
 
@@ -29,65 +29,61 @@ export async function POST(request: Request) {
   const seeds = body?.lots ?? [];
   if (lotIds.length === 0 && seeds.length === 0) return fail('lotIds or lots are required');
 
-  let db;
-  try {
-    db = supabaseServer();
-  } catch {
-    return fail('database is not configured', 503);
-  }
+  const store = db();
 
   // Unique-ish code; retry a couple of times on collision.
   let sale: Sale | null = null;
-  for (let attempt = 0; attempt < 4 && !sale; attempt++) {
-    const { data, error } = await db
-      .from('sales')
-      .insert({ code: makeCode(), title: body?.title?.trim() || 'The Sellout', phase: 'idle', watchers: 0 })
-      .select('*')
-      .single<Sale>();
-    if (data) sale = data;
-    else if (error && !/duplicate|unique/i.test(error.message)) return fail(error.message, 500);
+  try {
+    for (let attempt = 0; attempt < 4 && !sale; attempt++) {
+      sale = await store.createSale({ code: makeCode(), title: body?.title?.trim() || 'The Sellout' });
+    }
+  } catch (e) {
+    return fail(e instanceof Error ? e.message : 'could not open a sale', 500);
   }
   if (!sale) return fail('could not open a sale', 500);
 
   // Attach lots in the order they were given.
   const attached: Lot[] = [];
 
-  if (lotIds.length) {
-    const { data: rows } = await db.from('lots').select('*').in('id', lotIds);
-    const byId = new Map((rows ?? []).map((r) => [(r as Lot).id, r as Lot]));
-    const updates = lotIds
-      .map((id, i) => ({ lot: byId.get(id), order: i + 1 }))
-      .filter((u): u is { lot: Lot; order: number } => Boolean(u.lot));
-    for (const u of updates) {
-      const { data } = await db
-        .from('lots')
-        .update({ sale_id: sale.id, status: 'queued', sort_order: u.order, picked: true })
-        .eq('id', u.lot.id)
-        .select('*')
-        .single<Lot>();
-      if (data) attached.push(data);
+  try {
+    if (lotIds.length) {
+      const rows = await store.lotsByIds(lotIds);
+      const byId = new Map(rows.map((r) => [r.id, r]));
+      let order = 0;
+      for (const id of lotIds) {
+        const existing = byId.get(id);
+        if (!existing) continue;
+        order += 1;
+        const updated = await store.updateLot(existing.id, {
+          sale_id: sale.id,
+          status: 'queued',
+          sort_order: order,
+          picked: true,
+        });
+        if (updated) attached.push(updated);
+      }
     }
-  }
 
-  if (seeds.length) {
-    const base = attached.length;
-    const rows = seeds.map((s, i) => ({
-      sale_id: sale.id,
-      name: s.name,
-      category: s.category ?? 'Other',
-      condition: s.condition ?? null,
-      blurb: s.blurb ?? null,
-      image_url: s.image_url ?? null,
-      low: s.low ?? null,
-      high: s.high ?? null,
-      reserve: s.reserve ?? (s.low ? Math.round(s.low * 0.55) : null),
-      picked: true,
-      status: 'queued',
-      sort_order: base + i + 1,
-    }));
-    const { data, error } = await db.from('lots').insert(rows).select('*');
-    if (error) return fail(error.message, 500);
-    attached.push(...((data ?? []) as Lot[]));
+    if (seeds.length) {
+      const base = attached.length;
+      const rows: NewLotRow[] = seeds.map((s, i) => ({
+        sale_id: sale.id,
+        name: s.name,
+        category: s.category ?? 'Other',
+        condition: s.condition,
+        blurb: s.blurb,
+        image_url: s.image_url,
+        low: s.low,
+        high: s.high,
+        reserve: s.reserve ?? (s.low ? Math.round(s.low * 0.55) : undefined),
+        picked: true,
+        status: 'queued',
+        sort_order: base + i + 1,
+      }));
+      attached.push(...(await store.insertLots(rows)));
+    }
+  } catch (e) {
+    return fail(e instanceof Error ? e.message : 'could not attach lots', 500);
   }
 
   if (attached.length === 0) return fail('none of those lots exist', 404);

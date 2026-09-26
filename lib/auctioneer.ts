@@ -1,6 +1,6 @@
 // The auctioneer: run-of-sale state machine plus the voice.
 // Called by POST /api/sale/[code]/tick, which the auction screen polls every ~8s.
-import { supabaseServer } from '@/lib/supabase';
+import { db } from '@/lib/db';
 import { structured } from '@/lib/llm';
 import { createCheckoutForLot } from '@/lib/shopify';
 import { findSale, openingBid, saleLots } from '@/lib/sale';
@@ -33,12 +33,12 @@ function shortName(name: string): string {
 // ── Settling a lot ──────────────────────────────────────────
 
 export async function closeLot(code: string): Promise<CloseLotResponse> {
-  const db = supabaseServer();
+  const store = db();
   const sale = await findSale(code);
   if (!sale) throw new Error('sale not found');
   if (!sale.current_lot_id) return { winner: null, amount: null, checkoutUrl: null };
 
-  const { data: lot } = await db.from('lots').select('*').eq('id', sale.current_lot_id).maybeSingle<Lot>();
+  const lot = await store.getLot(sale.current_lot_id);
   if (!lot) throw new Error('lot not found');
 
   // Idempotent: a lot that already fell keeps its result.
@@ -62,15 +62,17 @@ export async function closeLot(code: string): Promise<CloseLotResponse> {
       amount,
       buyerName: winner,
     });
-    await db
-      .from('lots')
-      .update({ status: 'sold', sold_to: winner, sold_for: amount, checkout_url: checkoutUrl })
-      .eq('id', lot.id);
+    await store.updateLot(lot.id, {
+      status: 'sold',
+      sold_to: winner,
+      sold_for: amount,
+      checkout_url: checkoutUrl,
+    });
   } else {
-    await db.from('lots').update({ status: 'unsold' }).eq('id', lot.id);
+    await store.updateLot(lot.id, { status: 'unsold' });
   }
 
-  await db.from('sales').update({ phase: 'sold', lot_ends_at: null }).eq('id', sale.id);
+  await store.updateSale(sale.id, { phase: 'sold', lot_ends_at: null });
   return { winner: winner ?? null, amount, checkoutUrl };
 }
 
@@ -180,7 +182,7 @@ async function llmSay(c: Ctx): Promise<{ say: string; answeredMessageIds: string
 // ── The tick ────────────────────────────────────────────────
 
 export async function tick(code: string): Promise<TickResponse> {
-  const db = supabaseServer();
+  const store = db();
   const sale0 = await findSale(code);
   if (!sale0) throw new Error('sale not found');
   let sale = sale0;
@@ -194,21 +196,27 @@ export async function tick(code: string): Promise<TickResponse> {
   let event = 'nothing new';
 
   const present = async (lot: Lot) => {
-    await db.from('lots').update({ status: 'live' }).eq('id', lot.id);
-    const { data } = await db
-      .from('sales')
-      .update({ phase: 'presenting', current_lot_id: lot.id, high_bid: null, high_bidder: null, lot_ends_at: null })
-      .eq('id', sale.id)
-      .select('*')
-      .single<Sale>();
-    sale = data ?? { ...sale, phase: 'presenting', current_lot_id: lot.id, high_bid: null, high_bidder: null, lot_ends_at: null };
+    await store.updateLot(lot.id, { status: 'live' });
+    const patch: Partial<Sale> = {
+      phase: 'presenting',
+      current_lot_id: lot.id,
+      high_bid: null,
+      high_bidder: null,
+      lot_ends_at: null,
+    };
+    const updated = await store.updateSale(sale.id, patch);
+    sale = updated ?? { ...sale, ...patch };
+    // Keep the local copy in step so the line below describes the right lot.
+    const live = lots.find((l) => l.id === lot.id);
+    if (live) live.status = 'live';
     action = 'next_lot';
     event = `bringing up ${lot.name}`;
   };
 
   const end = async () => {
-    await db.from('sales').update({ phase: 'ended', current_lot_id: null, lot_ends_at: null }).eq('id', sale.id);
-    sale = { ...sale, phase: 'ended', current_lot_id: null, lot_ends_at: null };
+    const patch: Partial<Sale> = { phase: 'ended', current_lot_id: null, lot_ends_at: null };
+    const updated = await store.updateSale(sale.id, patch);
+    sale = updated ?? { ...sale, ...patch };
     action = 'end_sale';
     event = 'the sale is over, sign off';
   };
@@ -223,13 +231,14 @@ export async function tick(code: string): Promise<TickResponse> {
     case 'presenting': {
       if (s.ticksInPhase >= PRESENT_TICKS) {
         const ends = new Date(now + BIDDING_SECONDS * 1000).toISOString();
-        const { data } = await db
-          .from('sales')
-          .update({ phase: 'bidding', lot_ends_at: ends, high_bid: null, high_bidder: null })
-          .eq('id', sale.id)
-          .select('*')
-          .single<Sale>();
-        sale = data ?? { ...sale, phase: 'bidding', lot_ends_at: ends };
+        const patch: Partial<Sale> = {
+          phase: 'bidding',
+          lot_ends_at: ends,
+          high_bid: null,
+          high_bidder: null,
+        };
+        const updated = await store.updateSale(sale.id, patch);
+        sale = updated ?? { ...sale, ...patch };
         action = 'open_bidding';
         event = `bidding is open, ${BIDDING_SECONDS} seconds on the clock`;
       }
@@ -259,12 +268,12 @@ export async function tick(code: string): Promise<TickResponse> {
       break;
   }
 
-  const lot = sale.current_lot_id ? lots.find((l) => l.id === sale.current_lot_id) ?? null : null;
-  const [{ data: questions }, bidsRes] = await Promise.all([
-    db.from('sale_messages').select('*').eq('sale_id', sale.id).eq('answered', false).order('created_at').limit(3),
-    lot
-      ? db.from('sale_bids').select('*').eq('lot_id', lot.id).gt('created_at', s.lastTickAt).order('created_at')
-      : Promise.resolve({ data: [] as SaleBid[] }),
+  // Re-read the lot rather than trusting the list we loaded before the transition,
+  // so a lot that just fell reports who won it and for how much.
+  const lot = sale.current_lot_id ? await store.getLot(sale.current_lot_id) : null;
+  const [questions, newBids] = await Promise.all([
+    store.unansweredMessages(sale.id, 3),
+    lot ? store.bidsForLotSince(lot.id, s.lastTickAt) : Promise.resolve([] as SaleBid[]),
   ]);
 
   const ctx: Ctx = {
@@ -274,8 +283,8 @@ export async function tick(code: string): Promise<TickResponse> {
     secondsLeft: sale.lot_ends_at
       ? Math.max(0, Math.round((new Date(sale.lot_ends_at).getTime() - now) / 1000))
       : null,
-    newBids: (bidsRes.data ?? []) as SaleBid[],
-    questions: (questions ?? []) as SaleMessage[],
+    newBids,
+    questions,
     remaining: lots.filter((l) => l.status === 'queued').length,
     lotNumber: lot ? lots.findIndex((l) => l.id === lot.id) + 1 : 0,
     opening: openingBid(lot),
@@ -298,7 +307,7 @@ export async function tick(code: string): Promise<TickResponse> {
   }
 
   if (answeredMessageIds.length) {
-    await db.from('sale_messages').update({ answered: true }).in('id', answeredMessageIds);
+    await store.markAnswered(answeredMessageIds);
   }
 
   const next = getState(sale);

@@ -1,5 +1,5 @@
 import { ok, fail } from '@/lib/api';
-import { supabaseServer } from '@/lib/supabase';
+import { db } from '@/lib/db';
 import { findSale } from '@/lib/sale';
 import type { BidResponse } from '@/lib/types';
 
@@ -14,12 +14,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ cod
     return fail('bidder and a positive amount are required');
   }
 
-  let db;
-  try {
-    db = supabaseServer();
-  } catch {
-    return fail('database is not configured', 503);
-  }
+  const store = db();
 
   const sale = await findSale(code);
   if (!sale) return fail('sale not found', 404);
@@ -28,24 +23,18 @@ export async function POST(request: Request, { params }: { params: Promise<{ cod
     return fail('the hammer has fallen on this lot', 409);
   }
 
-  const current = Number(sale.high_bid ?? 0);
-  if (amount <= current) return fail(`bid must beat £${current}`, 409);
+  const current = sale.high_bid === null || sale.high_bid === undefined ? null : Number(sale.high_bid);
+  if (amount <= (current ?? 0)) return fail(`bid must beat £${current ?? 0}`, 409);
 
-  // Optimistic guard: only win the update if the high bid is still what we read,
-  // so two people tapping at the same instant cannot both become the leader.
-  const update = db.from('sales').update({ high_bid: amount, high_bidder: bidder }).eq('id', sale.id);
-  const guarded = sale.high_bid === null ? update.is('high_bid', null) : update.eq('high_bid', sale.high_bid);
-  const { data: updated, error: updErr } = await guarded.select('high_bid, high_bidder');
-  if (updErr) return fail(updErr.message, 500);
-  if (!updated || updated.length === 0) return fail('outbid, try again', 409);
-
-  const { error: bidErr } = await db.from('sale_bids').insert({
-    sale_id: sale.id,
-    lot_id: sale.current_lot_id,
-    bidder,
-    amount,
-  });
-  if (bidErr) return fail(bidErr.message, 500);
+  // Compare-and-set: only win if the high bid is still what we read, so two
+  // people tapping at the same instant cannot both become the leader.
+  try {
+    const won = await store.casHighBid(sale.id, current, amount, bidder);
+    if (!won) return fail('outbid, try again', 409);
+    await store.insertBid({ sale_id: sale.id, lot_id: sale.current_lot_id, bidder, amount });
+  } catch (e) {
+    return fail(e instanceof Error ? e.message : 'bid failed', 500);
+  }
 
   return ok<BidResponse>({ ok: true, highBid: amount, highBidder: bidder });
 }

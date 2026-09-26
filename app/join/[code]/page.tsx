@@ -7,7 +7,10 @@ import { Users, Clock, Check, Chevron } from "@/components/icons";
 
 const ROUND = 30;
 const NAME_KEY = "sellout.name";
-const POLL_MS = 3000;
+// Polling is the primary path: the sale runs with or without a database, so we
+// never assume Realtime is there. A second is fast enough to feel live.
+const POLL_MS = 1200;
+const HAS_REALTIME = Boolean(process.env.NEXT_PUBLIC_SUPABASE_URL);
 
 type Feed = { id: string; kind: "bid" | "message"; who: string; what: string };
 
@@ -40,9 +43,27 @@ export default function JoinPage({ params }: { params: Promise<{ code: string }>
 
   useEffect(() => { refresh(); }, [refresh]);
 
+  // Poll while the tab is in front; pause when it is hidden so a phone in a
+  // pocket is not hammering the server, and catch up the moment it comes back.
   useEffect(() => {
-    const t = setInterval(refresh, POLL_MS);
-    return () => clearInterval(t);
+    let timer: ReturnType<typeof setInterval> | null = null;
+
+    const stop = () => { if (timer) { clearInterval(timer); timer = null; } };
+    const start = () => { if (!timer) timer = setInterval(refresh, POLL_MS); };
+
+    const onVisibility = () => {
+      if (document.hidden) stop();
+      else { refresh(); start(); }
+    };
+
+    if (!document.hidden) start();
+    document.addEventListener("visibilitychange", onVisibility);
+    window.addEventListener("focus", onVisibility);
+    return () => {
+      stop();
+      document.removeEventListener("visibilitychange", onVisibility);
+      window.removeEventListener("focus", onVisibility);
+    };
   }, [refresh]);
 
   useEffect(() => {
@@ -50,9 +71,10 @@ export default function JoinPage({ params }: { params: Promise<{ code: string }>
     return () => clearInterval(t);
   }, []);
 
+  // Realtime is an enhancement on top of the poll, only when Supabase exists.
   const saleId = state?.sale.id;
   useEffect(() => {
-    if (!saleId || !name) return;
+    if (!HAS_REALTIME || !saleId || !name) return;
     let channel: ReturnType<ReturnType<typeof supabaseBrowser>["channel"]> | null = null;
     try {
       const db = supabaseBrowser();
@@ -91,6 +113,18 @@ export default function JoinPage({ params }: { params: Promise<{ code: string }>
   const biddingOpen = sale?.phase === "bidding" && left > 0;
   const iLead = Boolean(name && sale?.high_bidder === name);
   const iWon = Boolean(lot?.status === "sold" && name && lot.sold_to === name);
+
+  // Without Realtime presence there is no true headcount, so count the people
+  // who have actually done something in this sale, plus you.
+  const inTheRoom = useMemo(() => {
+    if (HAS_REALTIME) return watchers;
+    if (!state) return 1;
+    const names = new Set<string>();
+    state.bids.forEach((b) => names.add(b.bidder));
+    state.messages.forEach((m) => names.add(m.name));
+    if (name) names.add(name);
+    return Math.max(1, names.size);
+  }, [state, watchers, name]);
 
   const feed: Feed[] = useMemo(() => {
     if (!state) return [];
@@ -193,7 +227,7 @@ export default function JoinPage({ params }: { params: Promise<{ code: string }>
       <header className="pad safe-t" style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
         <span className="meta">Room {room} · {status}</span>
         <span style={{ display: "inline-flex", alignItems: "center", gap: 5, color: "var(--ink-2)", fontSize: 13 }}>
-          <Users size={16} /> {watchers}
+          <Users size={16} /> {inTheRoom}
         </span>
       </header>
 

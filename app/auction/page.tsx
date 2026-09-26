@@ -13,7 +13,10 @@ import { X, Dots, Heart, Users, Clock, Pause, Play, Share, Check } from "@/compo
 const ROUND = 30;           // seconds of bidding per lot, matches lib/auctioneer.ts
 const TICK_MS = 8000;       // how often the auctioneer speaks
 const NUDGE_MS = 1500;      // debounce before reacting to a bid or a question
+const STATE_MS = 1200;      // how often the stage re-reads the sale
 const SALE_KEY = "sellout.sale";
+// Realtime is an enhancement. The poll above is what actually keeps this honest.
+const HAS_REALTIME = Boolean(process.env.NEXT_PUBLIC_SUPABASE_URL);
 
 const LINES = [
   "Right, this is the one I'd take home myself.",
@@ -133,7 +136,7 @@ export default function AuctionScreen() {
   const tickRef = useRef<() => void>(() => {});
 
   useEffect(() => {
-    if (mode !== "live" || !code || !sale) return;
+    if (!HAS_REALTIME || mode !== "live" || !code || !sale) return;
     let channel: ReturnType<ReturnType<typeof supabaseBrowser>["channel"]> | null = null;
     try {
       const db = supabaseBrowser();
@@ -180,6 +183,58 @@ export default function AuctionScreen() {
     const t = setInterval(() => setNow(Date.now()), 500);
     return () => clearInterval(t);
   }, []);
+
+  /* ── Poll the sale: the stage must show a bid within a second,
+        with or without a database behind it. ─────────────────── */
+  const lastHigh = useRef<number | null>(null);
+
+  useEffect(() => {
+    if (mode !== "live" || !code) return;
+    let timer: ReturnType<typeof setInterval> | null = null;
+    let cancelled = false;
+
+    const pull = async () => {
+      const res = await fetch(`/api/sale/${code}`).catch(() => null);
+      if (!res?.ok || cancelled) return;
+      const state = (await res.json()) as SaleStateResponse;
+      if (cancelled) return;
+      setSale(state.sale);
+      setLot(state.lot);
+
+      // No Realtime presence means no true headcount, so count the people who
+      // have actually bid or asked something.
+      if (!HAS_REALTIME) {
+        const names = new Set<string>();
+        state.bids.forEach((b) => names.add(b.bidder));
+        state.messages.forEach((m) => names.add(m.name));
+        setWatchers(Math.max(1, names.size));
+      }
+
+      // A fresh bid should make the auctioneer react, not wait for the next tick.
+      const high = state.sale.high_bid === null ? null : Number(state.sale.high_bid);
+      if (lastHigh.current !== null && high !== null && high > lastHigh.current) {
+        if (nudge.current) clearTimeout(nudge.current);
+        nudge.current = setTimeout(() => tickRef.current(), NUDGE_MS);
+      }
+      lastHigh.current = high;
+    };
+
+    const stop = () => { if (timer) { clearInterval(timer); timer = null; } };
+    const start = () => { if (!timer) timer = setInterval(pull, STATE_MS); };
+    const onVisibility = () => {
+      if (document.hidden) stop();
+      else { pull(); start(); }
+    };
+
+    pull();
+    if (!document.hidden) start();
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => {
+      cancelled = true;
+      stop();
+      document.removeEventListener("visibilitychange", onVisibility);
+    };
+  }, [mode, code]);
 
   /* ── The voice ───────────────────────────────────────────── */
   const { speak, avatarState, videoId } = useAuctioneerVoice(mock, paused);
