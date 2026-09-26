@@ -16,6 +16,7 @@ export default function StageClient({ showId, mock }: { showId: string; mock: bo
   const [ticking, setTicking] = useState(false);
   const anamRef = useRef<AnamClient | null>(null);
   const stoppedRef = useRef(false);
+  const reconnectRef = useRef<() => void>(() => {});
   const tickingRef = useRef(false);
   const left = useCountdown(show?.phase === "auction" ? show.auction_ends_at : null);
   const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? (typeof window !== "undefined" ? window.location.origin : "");
@@ -59,7 +60,7 @@ export default function StageClient({ showId, mock }: { showId: string; mock: bo
         anamRef.current = null;
         if (!stoppedRef.current) {
           setStatus("connecting");
-          setTimeout(() => { if (!stoppedRef.current) connectAnam(); }, 1000);
+          setTimeout(() => { if (!stoppedRef.current) reconnectRef.current(); }, 1000);
         }
       });
       anamRef.current = client;
@@ -67,9 +68,10 @@ export default function StageClient({ showId, mock }: { showId: string; mock: bo
     } catch (e) {
       console.error(e);
       setStatus("error");
-      if (!stoppedRef.current) setTimeout(() => { if (!stoppedRef.current) connectAnam(); }, 4000);
+      if (!stoppedRef.current) setTimeout(() => { if (!stoppedRef.current) reconnectRef.current(); }, 4000);
     }
   }, [mock]);
+  useEffect(() => { reconnectRef.current = connectAnam; }, [connectAnam]);
 
   // ---- host loop ----
   const tick = useCallback(async () => {
@@ -95,10 +97,10 @@ export default function StageClient({ showId, mock }: { showId: string; mock: bo
   useEffect(() => {
     if (!running) return;
     stoppedRef.current = false;
-    connectAnam();
-    tick();
+    const start = setTimeout(() => { connectAnam(); tick(); }, 0);
     const id = setInterval(tick, 8000);
     return () => {
+      clearTimeout(start);
       clearInterval(id);
       stoppedRef.current = true;
       anamRef.current?.stopStreaming().catch(() => {});

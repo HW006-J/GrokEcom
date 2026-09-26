@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { supabaseBrowser } from "@/lib/supabase";
 import type { Item, ListingResponse } from "@/lib/types";
@@ -10,28 +10,27 @@ const storeDomain = process.env.NEXT_PUBLIC_SHOPIFY_STORE_DOMAIN;
 
 export default function SellPage() {
   const [files, setFiles] = useState<File[]>([]);
-  const [previews, setPreviews] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [items, setItems] = useState<Item[]>([]);
   const [latest, setLatest] = useState<Item | null>(null);
 
-  useEffect(() => {
-    const urls = files.map((f) => URL.createObjectURL(f));
-    setPreviews(urls);
-    return () => urls.forEach((u) => URL.revokeObjectURL(u));
-  }, [files]);
+  const previews = useMemo(() => files.map((f) => URL.createObjectURL(f)), [files]);
 
   async function loadItems() {
+    let result: { items?: Item[]; error?: string };
     try {
       const sb = supabaseBrowser();
       const { data } = await sb.from("items").select("*").eq("show_id", showId).order("sort_order");
-      setItems((data ?? []) as Item[]);
+      result = { items: (data ?? []) as Item[] };
     } catch (e) {
-      setError((e as Error).message);
+      result = { error: (e as Error).message };
     }
+    await Promise.resolve();
+    if (result.items) setItems(result.items);
+    if (result.error) setError(result.error);
   }
-  useEffect(() => { loadItems(); }, []);
+  useEffect(() => { void loadItems(); }, []);
 
   function pick(list: FileList | null) {
     if (!list) return;

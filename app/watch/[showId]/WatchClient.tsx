@@ -13,7 +13,10 @@ export default function WatchClient({ showId }: { showId: string }) {
   const left = useCountdown(show?.phase === "auction" ? show.auction_ends_at : null);
 
   useEffect(() => {
-    try { setName(localStorage.getItem("cl_name")); } catch { setName(""); }
+    const id = setTimeout(() => {
+      try { setName(localStorage.getItem("cl_name") ?? ""); } catch { setName(""); }
+    }, 0);
+    return () => clearTimeout(id);
   }, []);
 
   function flash(msg: string) {

@@ -91,10 +91,8 @@ export function useShow(showId: string): ShowState {
 export function useCountdown(endsAt: string | null): number {
   const [left, setLeft] = useState(0);
   useEffect(() => {
-    if (!endsAt) { setLeft(0); return; }
-    const tick = () => setLeft(Math.max(0, Math.ceil((new Date(endsAt).getTime() - Date.now()) / 1000)));
-    tick();
-    const id = setInterval(tick, 250);
+    const tick = () => setLeft(endsAt ? Math.max(0, Math.ceil((new Date(endsAt).getTime() - Date.now()) / 1000)) : 0);
+    const id = setInterval(tick, 200);
     return () => clearInterval(id);
   }, [endsAt]);
   return left;
