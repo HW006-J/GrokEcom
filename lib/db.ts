@@ -201,6 +201,16 @@ class SupabaseStore implements SaleStore {
   }
 }
 
+/**
+ * A lot always needs something to render. An empty string becomes <img src="">,
+ * which browsers resolve to the page itself and draw as a broken image.
+ */
+const PLACEHOLDER_IMAGE =
+  'data:image/svg+xml;base64,' +
+  Buffer.from(
+    '<svg xmlns="http://www.w3.org/2000/svg" width="420" height="420"><rect width="420" height="420" fill="#f2f2f0"/></svg>'
+  ).toString('base64');
+
 // ── Memory backend ──────────────────────────────────────────
 
 // Headroom so a busy day of rehearsals cannot crowd out the real one.
@@ -320,7 +330,7 @@ class MemoryStore implements SaleStore {
         category: r.category ?? 'Other',
         condition: r.condition ?? '',
         blurb: r.blurb ?? '',
-        image_url: r.image_url ?? '',
+        image_url: r.image_url || PLACEHOLDER_IMAGE,
         source_image_url: r.source_image_url ?? null,
         bbox: r.bbox ?? null,
         low: r.low ?? 0,

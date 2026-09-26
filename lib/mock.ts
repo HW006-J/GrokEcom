@@ -12,6 +12,8 @@ export type ScannedObject = {
   condition: string;
   blurb: string;
   picked: boolean;
+  /** True once `image` is an isolated cutout rather than a crop of the room. */
+  cutout?: boolean;
   // Present once the object came from a real scan.
   reserve?: number;
   comps?: Comp[];
